@@ -1,0 +1,5 @@
+{
+  "name": "@geohash-chat/web",
+  "private": true,
+  "type": "module"
+}
