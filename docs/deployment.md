@@ -1,6 +1,6 @@
 # Deploy to AWS
 
-> Schema v3 local update: see [architecture](architecture.md). The random-slot revision is not deployed. Existing DataV2 migration/copy steps below describe historical schema v2 and are not a v3 data conversion. A future coordinated deployment creates PostsV3/ControlV3, retains the old physical table, and must refresh recorded backend table outputs.
+> Schema v3 is deployed. See [architecture](architecture.md) for the random-slot storage model. The old physical DataV2 tables remain retained; no old data was copied.
 
 Deployment creates billable AWS resources. Use an existing AWS account with an authenticated CLI profile and CDK bootstrap permissions. The repository does not contain credentials. See the verification checklist below for checks beyond infrastructure deployment.
 
@@ -26,6 +26,17 @@ npx cdk deploy GeohashChat --outputs-file cdk-outputs.json
 Both regions are bootstrapped. Each stack pins its own region; changing `AWS_REGION` does not move it. The western stack publishes active assets, and the edge stack's asset deployment triggers CloudFront invalidation when assets/config change. CloudFront remains global; the certificate stays in us-east-1 as AWS requires. The stack does not configure `www` or modify registrar delegation.
 
 S3 remains private with CloudFront Origin Access Control. The western bucket policy grants read access only to the existing distribution. The edge stack imports this bucket, so CDK reports that it cannot update the imported policy; that policy is deliberately managed by the western stack. `/api/*` is uncached and forwards Authorization, cookies and the custom request header. Only `/` and valid geohash paths rewrite to the SPA.
+
+## Schema v3 deployment — 2026-11-11
+
+Caller identity confirmed account **451261323611**. The western stack and edge stack were updated; the active CloudFront API and asset origins remain in us-west-2. The eastern backend remains read-only and does not serve site traffic. Both stacks provisioned their v3 tables; old DataV2 physical tables were retained without migration.
+
+Active western tables:
+
+- Posts: `GeohashChatWest-PostsV3CA088AC3-13H4HESM7PYE2` — TTL disabled.
+- Controls: `GeohashChatWest-ControlV33CDFAE28-1O1MIUR5C1FH9` — TTL enabled on `expiresAt`.
+
+Build and 30 TypeScript tests passed before deployment. Live checks passed for HTTPS, deep links, assets, western config, health, room reads, smart zoom, secure HttpOnly guest cookie, authenticated `/me`, invalid-location rejection and request-header protection. No posts were published by smoke checks. Real browser geolocation, successful end-to-end publication/moderation and load tests remain acceptance work.
 
 ## Western cutover verification — 2026-11-10
 
@@ -74,7 +85,7 @@ The lockfile pins the installed dependencies. The test runner was updated to rem
 
 ## Upgrading to schema v3
 
-This revision creates empty `PostsV3` and `ControlV3` tables. The old `DataV2` table is retained. No posts, sessions, reports or bans are automatically copied. Existing guest bearer identities will become new cookie identities. Review the diff and coordinate backend/frontend rollout; downtime is allowed for the planned fresh-data update. The commands above are deployment instructions, not a record that v3 has been deployed.
+This revision creates empty `PostsV3` and `ControlV3` tables. The old `DataV2` table is retained. No posts, sessions, reports or bans are automatically copied. Existing guest bearer identities will become new cookie identities. Review the diff and coordinate backend/frontend rollout; downtime is allowed for the planned fresh-data update. The commands above describe the coordinated deployment sequence.
 
 After deploying the western stack, update `cdk.json`'s `backendTarget.tableName` from its new `TableName` output before deploying the edge stack. Record `ControlTableName` separately for operations. Preserve the existing API, bucket, pool, account and region identifiers unless the actual outputs change. Historical v2 migration scripts must not copy old records into v3 tables.
 

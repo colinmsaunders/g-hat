@@ -47,7 +47,7 @@ See [architecture and DynamoDB schema](docs/architecture.md), [API contracts](do
 
 ## Scope and next milestone
 
-This local schema-v3 revision has not been deployed. The recorded live deployment uses the earlier schema. Updating creates empty `PostsV3` and `ControlV3` tables and changes API contracts; old tables are retained. Deploy frontend and backend together. Existing region migration scripts apply only to historical schema v2.
+Schema v3 is deployed in account 451261323611, with the active backend in us-west-2. The coordinated update created `PostsV3` and `ControlV3`; old tables were retained without copying data. Existing region migration scripts apply only to historical schema v2.
 
 Remaining launch work: load/cost testing, alert routing, operational moderation, verified viewer-IP protection behind CloudFront, and broader content abuse handling. Browser GPS is spoofable; coarse motion checks can race. Full-room reads and durable moderation markers have growing read costs. Broad prefixes may become hot. These tradeoffs are documented in the architecture.
 

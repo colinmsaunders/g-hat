@@ -1,6 +1,6 @@
 # Architecture — random room slots (schema v3)
 
-Read anywhere. Post from your reported current location. The TypeScript monorepo, Lambda HTTP API, DynamoDB, React/Vite, Cognito and CDK remain in place. This revision replaces adaptive precision and newest-1,000 retention. It is implemented locally and has not been deployed.
+Read anywhere. Post from your reported current location. The TypeScript monorepo, Lambda HTTP API, DynamoDB, React/Vite, Cognito and CDK remain in place. This revision replaces adaptive precision and newest-1,000 retention. It is deployed to account 451261323611, with the active application in us-west-2.
 
 ## Eight geographic levels
 
@@ -74,4 +74,4 @@ API responses remain uncached; CloudFront read caching is an optional future opt
 
 Schema v3 uses new empty tables. Removing the old `DataV2` CDK resource retains its physical table under its existing retention policy. Legacy data is neither converted nor silently mixed into slots. Existing guest bearer sessions are replaced by new cookie sessions. API contracts change together with the frontend; deploy as a coordinated update with downtime permitted. Existing region-copy scripts describe schema v2 only and must not be used as a v3 migration.
 
-The current recorded deployment targets AWS account **451261323611**, application region **us-west-2**, with the global edge/certificate stack in us-east-1. This task does not deploy or change AWS authentication. At a future deployment, verify caller identity, deploy the western backend, refresh the recorded table outputs, then coordinate edge assets/config. Old retained data and backup disposal are separate explicit operations.
+The current recorded deployment targets AWS account **451261323611**, application region **us-west-2**, with the global edge/certificate stack in us-east-1. The deployment verified caller identity in that account, deployed the western backend, refreshed the recorded table output, and updated the edge assets/config. Verify identity again before future updates. Old retained data and backup disposal are separate explicit operations.

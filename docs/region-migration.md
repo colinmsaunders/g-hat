@@ -1,6 +1,6 @@
 # Move geohash.chat to us-west-2
 
-> Schema v3 local update: see [architecture](architecture.md). The random-slot revision is not deployed. Existing DataV2 migration/copy steps below describe historical schema v2 and are not a v3 data conversion. A future coordinated deployment creates PostsV3/ControlV3, retains the old physical table, and must refresh recorded backend table outputs.
+> Schema v3 local update: see [architecture](architecture.md). The random-slot revision is now deployed. Existing DataV2 migration/copy steps below describe historical schema v2 and are not a v3 data conversion. The coordinated deployment created PostsV3/ControlV3, retained the old physical tables, and refreshed the recorded backend table output.
 
 ## Completed cutover — 2026-11-10
 
