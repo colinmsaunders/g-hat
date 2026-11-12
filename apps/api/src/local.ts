@@ -1,7 +1,9 @@
 import { createServer } from "node:http";
 import { createApp } from "./app";
 import { MemoryStore } from "./memory";
-const app = createApp(new MemoryStore());
+const app = createApp(new MemoryStore(), undefined, {
+  insecureLocalCookie: true,
+});
 createServer(async (req, res) => {
   res.setHeader("content-type", "application/json");
   res.setHeader("cache-control", "no-store");
@@ -24,9 +26,12 @@ createServer(async (req, res) => {
     path: url.pathname,
     query: url.searchParams,
     body,
+    cookie: req.headers.cookie,
+    csrf: req.headers["x-geohash-request"] as string | undefined,
     token: req.headers.authorization?.replace(/^Bearer /i, ""),
     ip: req.socket.remoteAddress ?? "local",
   });
+  if (result.cookies) res.setHeader("set-cookie", result.cookies);
   res.writeHead(result.status);
   res.end(JSON.stringify(result.body));
 }).listen(3001, "127.0.0.1", () =>

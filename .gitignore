@@ -6,3 +6,6 @@ cdk-outputs.json
 !.env.example
 coverage/
 .DS_Store
+
+__pycache__/
+cdk-west-outputs.json

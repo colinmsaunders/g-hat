@@ -14,7 +14,8 @@ export const config: Config = await fetch("/config.json", {
 });
 export const sessionKey = "geohash.chat.session";
 export function token() {
-  return localStorage.getItem(sessionKey) ?? "";
+  const value = localStorage.getItem(sessionKey) ?? "";
+  return value.startsWith("guest_") ? "" : value;
 }
 export function saveToken(value: string) {
   localStorage.setItem(sessionKey, value);
@@ -25,8 +26,10 @@ export async function api<T>(
 ): Promise<T> {
   const r = await fetch(config.apiUrl + path, {
     ...options,
+    credentials: "same-origin",
     headers: {
       "content-type": "application/json",
+      "x-geohash-request": "1",
       ...(token() ? { authorization: `Bearer ${token()}` } : {}),
       ...options.headers,
     },
@@ -39,7 +42,7 @@ let starting: Promise<Identity> | undefined;
 export async function ensureGuest(): Promise<Identity> {
   if (starting) return starting;
   starting = (async () => {
-    if (token()) {
+    {
       try {
         return await api<Identity>("/me");
       } catch (e) {
@@ -47,16 +50,12 @@ export async function ensureGuest(): Promise<Identity> {
         localStorage.removeItem(sessionKey);
       }
     }
-    const session = await api<{ token: string; identity: Identity }>(
-      "/sessions",
-      {
-        method: "POST",
-        body: JSON.stringify({
-          name: localStorage.getItem("geohash.chat.name") ?? "Wanderer",
-        }),
-      },
-    );
-    saveToken(session.token);
+    const session = await api<{ identity: Identity }>("/sessions", {
+      method: "POST",
+      body: JSON.stringify({
+        name: localStorage.getItem("geohash.chat.name") ?? "Wanderer",
+      }),
+    });
     return session.identity;
   })();
   try {

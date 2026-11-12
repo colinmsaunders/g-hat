@@ -6,7 +6,37 @@ export const roomSchema = z
     /^[0-9bcdefghjkmnpqrstuvwxyz]{1,8}$/,
     "Use a geohash of 1–8 characters.",
   );
-export const ROOM_CAPACITY = 1000;
+export const ROOM_CAPACITY = 1024;
+export const POST_ID_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+export const POST_ID_BYTES = 20;
+export const postIdSchema = z
+  .string()
+  .regex(/^[A-Z2-7]{32}$/, "Invalid Base32 post ID.");
+export const originSchema = roomSchema.length(
+  8,
+  "Posting origins must have precision 8.",
+);
+/** RFC 4648 Base32, most significant bit first, exactly 160 bits and no padding. */
+export function encodePostId(bytes: Uint8Array): string {
+  if (bytes.length !== POST_ID_BYTES)
+    throw new Error("Post IDs require 20 random bytes.");
+  let result = "",
+    value = 0,
+    bits = 0;
+  for (const byte of bytes) {
+    value = (value << 8) | byte;
+    bits += 8;
+    while (bits >= 5) {
+      bits -= 5;
+      result += POST_ID_ALPHABET[(value >>> bits) & 31];
+    }
+    value &= (1 << bits) - 1;
+  }
+  return result;
+}
+export function postSlot(postId: string): string {
+  return postIdSchema.parse(postId).slice(0, 2);
+}
 export const LOCATION_MAX_AGE_MS = 60_000;
 export const LOCATION_FUTURE_SKEW_MS = 5_000;
 export const locationSchema = z.object({
@@ -21,8 +51,7 @@ export const locationSchema = z.object({
 });
 export type PostingLocation = z.infer<typeof locationSchema>;
 export const postSchema = z.object({
-  text: z.string().trim().min(1).max(2000),
-  requestId: z.uuid(),
+  content: z.string().trim().min(1).max(2000),
   location: locationSchema,
 });
 export const nameSchema = z
@@ -31,14 +60,13 @@ export const nameSchema = z
   .min(2)
   .max(24)
   .regex(/^[\p{L}\p{N} _.-]+$/u);
-export interface Message {
-  id: string;
-  room: string;
+export interface Post {
+  postId: string;
+  originGeohash: string;
   authorId: string;
-  name: string;
-  text: string;
+  displayName: string;
+  content: string;
   createdAt: string;
-  deleted?: boolean;
 }
 export interface Identity {
   id: string;
@@ -46,7 +74,7 @@ export interface Identity {
   moderator: boolean;
 }
 export interface Page {
-  messages: Message[];
+  posts: Post[];
   cursor?: string;
 }
 export function ancestors(room: string): string[] {
@@ -155,7 +183,7 @@ export function command(text: string, room: string): Command | null {
   throw new Error("Unknown command. Try /help.");
 }
 
-/** Precision is a resolution choice, not proof that the uncertainty circle is inside the cell. */
+/** Precision 8 identifies a cell, not verified physical location or measurement accuracy. */
 export function postingRoom(input: PostingLocation, now = Date.now()): string {
   const location = locationSchema.parse(input);
   z.number()
@@ -165,18 +193,5 @@ export function postingRoom(input: PostingLocation, now = Date.now()): string {
     )
     .max(now + LOCATION_FUTURE_SKEW_MS, "Location timestamp is in the future.")
     .parse(location.timestamp);
-  const metersPerDegree = (Math.PI * 6371008.8) / 180;
-  for (let precision = 8; precision >= 1; precision--) {
-    const room = encode(location.latitude, location.longitude, precision);
-    const b = bounds(room);
-    const width =
-      (b.east - b.west) *
-      metersPerDegree *
-      Math.cos((location.latitude * Math.PI) / 180);
-    const height = (b.north - b.south) * metersPerDegree;
-    if (Math.min(width, height) >= 2 * location.accuracy) return room;
-  }
-  throw new Error(
-    "Location is too imprecise at this latitude. Try a better location fix.",
-  );
+  return encode(location.latitude, location.longitude, 8);
 }

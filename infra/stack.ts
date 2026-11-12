@@ -14,22 +14,85 @@ import * as origins from "aws-cdk-lib/aws-cloudfront-origins";
 import * as route53 from "aws-cdk-lib/aws-route53";
 import * as targets from "aws-cdk-lib/aws-route53-targets";
 import * as acm from "aws-cdk-lib/aws-certificatemanager";
+import * as iam from "aws-cdk-lib/aws-iam";
 import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
 import { existsSync } from "node:fs";
+export interface BackendTarget {
+  region: string;
+  apiId: string;
+  bucketName: string;
+  userPoolId: string;
+  userPoolClientId: string;
+  tableName: string;
+}
+export interface ChatStackProps extends cdk.StackProps {
+  regionalOnly?: boolean;
+  readOnly?: boolean;
+  edgeDistributionId?: string;
+  backendTarget?: BackendTarget;
+}
 export class ChatStack extends cdk.Stack {
-  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
+  constructor(scope: Construct, id: string, props?: ChatStackProps) {
     super(scope, id, props);
-    const table = new dynamodb.Table(this, "DataV2", {
+    const table = new dynamodb.Table(this, "PostsV3", {
       partitionKey: { name: "pk", type: dynamodb.AttributeType.STRING },
       sortKey: { name: "sk", type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+    });
+    const controls = new dynamodb.Table(this, "ControlV3", {
+      partitionKey: { name: "pk", type: dynamodb.AttributeType.STRING },
+      sortKey: { name: "sk", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       timeToLiveAttribute: "expiresAt",
       removalPolicy: cdk.RemovalPolicy.RETAIN,
       encryption: dynamodb.TableEncryption.AWS_MANAGED,
     });
+    new cdk.CfnOutput(this, "ControlTableName", { value: controls.tableName });
+    new cloudwatch.Dashboard(this, "StorageDashboard", {
+      widgets: [
+        [
+          new cloudwatch.GraphWidget({
+            title: "Slot storage capacity and throttling",
+            left: [
+              table.metricConsumedReadCapacityUnits(),
+              table.metricConsumedWriteCapacityUnits(),
+            ],
+            right: [
+              table.metricThrottledRequestsForOperations({
+                operations: [
+                  dynamodb.Operation.QUERY,
+                  dynamodb.Operation.BATCH_WRITE_ITEM,
+                ],
+              }),
+            ],
+          }),
+        ],
+        [
+          new cloudwatch.GraphWidget({
+            title: "Slot storage latency",
+            left: [
+              table.metricSuccessfulRequestLatency({
+                dimensionsMap: {
+                  TableName: table.tableName,
+                  Operation: "Query",
+                },
+              }),
+              table.metricSuccessfulRequestLatency({
+                dimensionsMap: {
+                  TableName: table.tableName,
+                  Operation: "BatchWriteItem",
+                },
+              }),
+            ],
+          }),
+        ],
+      ],
+    });
     const pool = new cognito.UserPool(this, "Users", {
-      selfSignUpEnabled: true,
+      selfSignUpEnabled: !props?.readOnly,
       signInAliases: { email: true },
       autoVerify: { email: true },
       standardAttributes: {
@@ -66,7 +129,9 @@ export class ChatStack extends cdk.Stack {
       reservedConcurrentExecutions: 50,
       bundling: { minify: true, sourceMap: true, externalModules: [] },
       environment: {
-        TABLE_NAME: table.tableName,
+        READ_ONLY: props?.readOnly ? "true" : "false",
+        POSTS_TABLE_NAME: table.tableName,
+        CONTROL_TABLE_NAME: controls.tableName,
         USER_POOL_ID: pool.userPoolId,
         USER_POOL_CLIENT_ID: poolClient.userPoolClientId,
       },
@@ -76,6 +141,7 @@ export class ChatStack extends cdk.Stack {
       }),
     });
     table.grantReadWriteData(fn);
+    controls.grantReadWriteData(fn);
     const api = new apigw.HttpApi(this, "HttpApi", {
       createDefaultStage: false,
     });
@@ -96,6 +162,64 @@ export class ChatStack extends cdk.Stack {
       encryption: s3.BucketEncryption.S3_MANAGED,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
+    const webPath = "apps/web/dist";
+    if (!existsSync(`${webPath}/index.html`))
+      throw new Error("Build the frontend first: npm run build");
+    const target = props?.backendTarget;
+    const config = {
+      apiUrl: "/api",
+      region: target?.region ?? this.region,
+      userPoolId: target?.userPoolId ?? pool.userPoolId,
+      userPoolClientId: target?.userPoolClientId ?? poolClient.userPoolClientId,
+      local: false,
+    };
+    if (props?.regionalOnly) {
+      if (!props.edgeDistributionId)
+        throw new Error(
+          "Regional assets require the existing edge distribution ID.",
+        );
+      bucket.addToResourcePolicy(
+        new iam.PolicyStatement({
+          principals: [new iam.ServicePrincipal("cloudfront.amazonaws.com")],
+          actions: ["s3:GetObject"],
+          resources: [bucket.arnForObjects("*")],
+          conditions: {
+            StringEquals: {
+              "AWS:SourceArn": `arn:${this.partition}:cloudfront::${this.account}:distribution/${props.edgeDistributionId}`,
+            },
+          },
+        }),
+      );
+      new deployment.BucketDeployment(this, "PublishWeb", {
+        destinationBucket: bucket,
+        sources: [
+          deployment.Source.asset(webPath),
+          deployment.Source.jsonData("config.json", config),
+        ],
+        cacheControl: [deployment.CacheControl.noCache()],
+      });
+      new cloudwatch.Alarm(this, "ApiErrors", {
+        metric: fn.metricErrors(),
+        threshold: 5,
+        evaluationPeriods: 1,
+      });
+      new cdk.CfnOutput(this, "ApiId", { value: api.apiId });
+      new cdk.CfnOutput(this, "ApiEndpoint", { value: api.apiEndpoint });
+      new cdk.CfnOutput(this, "BucketName", { value: bucket.bucketName });
+      new cdk.CfnOutput(this, "TableName", { value: table.tableName });
+      new cdk.CfnOutput(this, "UserPoolId", { value: pool.userPoolId });
+      new cdk.CfnOutput(this, "UserPoolClientId", {
+        value: poolClient.userPoolClientId,
+      });
+      new cdk.CfnOutput(this, "ApiFunctionName", { value: fn.functionName });
+      return;
+    }
+    const assetOrigin = target
+      ? s3.Bucket.fromBucketAttributes(this, "WesternAssets", {
+          bucketName: target.bucketName,
+          region: target.region,
+        })
+      : bucket;
     const domain = this.node.tryGetContext("domain") as string | undefined;
     let zone: route53.IHostedZone | undefined;
     let certificate: acm.ICertificate | undefined;
@@ -120,7 +244,7 @@ export class ChatStack extends cdk.Stack {
     // Rewrite only navigation paths. API errors and missing assets keep their real status.
     const rewrite = new cloudfront.Function(this, "SpaRoutes", {
       code: cloudfront.FunctionCode.fromInline(
-        "function handler(event) { var r=event.request; if (r.uri === '/' || /^\/[0-9bcdefghjkmnpqrstuvwxyz]{1,8}\/?$/.test(r.uri)) r.uri='/index.html'; return r; }",
+        String.raw`function handler(event) { var r=event.request; if (r.uri === '/' || /^\/[0-9bcdefghjkmnpqrstuvwxyz]{1,8}\/?$/.test(r.uri)) r.uri='/index.html'; return r; }`,
       ),
     });
     const distribution = new cloudfront.Distribution(this, "Web", {
@@ -128,7 +252,7 @@ export class ChatStack extends cdk.Stack {
       domainNames: domain ? [domain] : undefined,
       certificate,
       defaultBehavior: {
-        origin: origins.S3BucketOrigin.withOriginAccessControl(bucket),
+        origin: origins.S3BucketOrigin.withOriginAccessControl(assetOrigin),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
         responseHeadersPolicy:
@@ -143,7 +267,7 @@ export class ChatStack extends cdk.Stack {
       additionalBehaviors: {
         "/api/*": {
           origin: new origins.HttpOrigin(
-            `${api.apiId}.execute-api.${this.region}.${this.urlSuffix}`,
+            `${target?.apiId ?? api.apiId}.execute-api.${target?.region ?? this.region}.${this.urlSuffix}`,
           ),
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
           allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
@@ -169,20 +293,11 @@ export class ChatStack extends cdk.Stack {
         ),
       });
     }
-    const webPath = "apps/web/dist";
-    if (!existsSync(`${webPath}/index.html`))
-      throw new Error("Build the frontend first: npm run build");
     new deployment.BucketDeployment(this, "PublishWeb", {
       destinationBucket: bucket,
       sources: [
         deployment.Source.asset(webPath),
-        deployment.Source.jsonData("config.json", {
-          apiUrl: "/api",
-          region: this.region,
-          userPoolId: pool.userPoolId,
-          userPoolClientId: poolClient.userPoolClientId,
-          local: false,
-        }),
+        deployment.Source.jsonData("config.json", config),
       ],
       distribution,
       distributionPaths: ["/*"],
@@ -198,10 +313,14 @@ export class ChatStack extends cdk.Stack {
     new cdk.CfnOutput(this, "SiteUrl", {
       value: `https://${domain ?? distribution.distributionDomainName}`,
     });
-    new cdk.CfnOutput(this, "UserPoolId", { value: pool.userPoolId });
-    new cdk.CfnOutput(this, "UserPoolClientId", {
-      value: poolClient.userPoolClientId,
+    new cdk.CfnOutput(this, "UserPoolId", {
+      value: target?.userPoolId ?? pool.userPoolId,
     });
-    new cdk.CfnOutput(this, "TableName", { value: table.tableName });
+    new cdk.CfnOutput(this, "UserPoolClientId", {
+      value: target?.userPoolClientId ?? poolClient.userPoolClientId,
+    });
+    new cdk.CfnOutput(this, "TableName", {
+      value: target?.tableName ?? table.tableName,
+    });
   }
 }

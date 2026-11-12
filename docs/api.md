@@ -1,52 +1,45 @@
-# HTTP API — location-derived posting
+# HTTP API — schema v3
 
-All routes begin with `/api`. JSON requests/responses. Mutations use `Authorization: Bearer <guest token or Cognito ID token>`; reads are public except `/me` and moderation. Errors have `{ "error": "Human-readable message" }`. Typical codes: 400 validation, 401 missing/expired identity, 403 forbidden/banned, 404 missing resource, 409 deletion contention, 410 accepted post since evicted, 413 body size, 429 rate limit or write contention, 503 activity unavailable, 500 internal error. Bodies are limited to 16,000 characters before parsing. Message text is limited to 2,000 characters after trimming; rendered as plain text.
+All routes start with `/api`. JSON errors are `{error:string}`. Public room reads require no identity. Mutations require `x-geohash-request: 1` plus the guest cookie or optional `Authorization: Bearer <Cognito ID token>`. Guest bearer tokens are no longer accepted.
 
-| Method | Path                               | Input                                                    | Success                                                       |
-| ------ | ---------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------- |
-| GET    | `/health`                          | —                                                        | 200 `{ok:true}`                                               |
-| POST   | `/sessions`                        | `{name?:string}` (2–24 letters, digits, spaces, `_ . -`) | 201 `{token, identity, expiresAt}`                            |
-| GET    | `/me`                              | Bearer                                                   | 200 `Identity`                                                |
-| PATCH  | `/me`                              | Guest bearer, `{name}`                                   | 200 updated `Identity`                                        |
-| GET    | `/rooms/suggest?geohash=9q8yyk8y`  | Prefix 1–8                                               | 200 `{room, counts, windowMinutes:"15–20", targetMessages:3}` |
-| GET    | `/rooms/:prefix/messages?cursor=…` | Optional cursor                                          | 200 `{messages:Message[], cursor?:string}`                    |
-| POST   | `/messages`                        | Bearer, `{text,requestId:UUID,location}`                 | 201 `Message` (same message on retry)                         |
-| DELETE | `/messages/:id`                    | Owner/moderator bearer                                   | 200 `{deleted:true}`                                          |
-| POST   | `/messages/:id/reports`            | Bearer, `{reason:string}` (3–500 chars)                  | 201 `{reported:true}`                                         |
-| GET    | `/moderation/reports?cursor=…`     | Moderator bearer                                         | 200 `{reports:Report[],cursor?:string}`                       |
-| PUT    | `/moderation/users/:actorId`       | Moderator bearer, `{banned:boolean}`                     | 200 `{id,banned}`                                             |
+| Method | Path                                       | Input                         | Success                                                                             |
+| ------ | ------------------------------------------ | ----------------------------- | ----------------------------------------------------------------------------------- |
+| GET    | `/health`                                  | —                             | `{ok:true}`                                                                         |
+| POST   | `/sessions`                                | `{name?:string}`              | 201 `{identity,expiresAt}` plus HttpOnly cookie; 200 if valid cookie already exists |
+| GET    | `/me`                                      | Cookie or Cognito             | `Identity`                                                                          |
+| PATCH  | `/me`                                      | Guest cookie, `{name}`        | Updated identity                                                                    |
+| GET    | `/rooms/suggest?geohash=c23nb62w`          | Prefix 1–8                    | `{room,counts,windowMinutes:15,targetMessages:3}`                                   |
+| GET    | `/rooms/:prefix/messages?cursor=…`         | Optional cursor               | `{posts:Post[],cursor?:string}`                                                     |
+| POST   | `/messages`                                | `{content,location}`          | 201 `Post`                                                                          |
+| DELETE | `/messages/:postId?originGeohash=c23nb62w` | Owner or moderator            | `{deleted:true}`                                                                    |
+| POST   | `/messages/:postId/reports`                | `{originGeohash,reason}`      | 201 `{reported:true}`                                                               |
+| GET    | `/moderation/reports?cursor=…`             | Moderator                     | `{reports:Report[],cursor?:string}`                                                 |
+| PUT    | `/moderation/users/:actorId`               | Moderator, `{banned:boolean}` | `{id,banned}`                                                                       |
 
-```typescript
-interface Identity {
-  id: string;
-  name: string;
-  moderator: boolean;
-}
-interface Message {
-  id: string;
-  room: string;
-  authorId: string;
-  name: string;
-  text: string;
-  createdAt: string;
-  deleted?: boolean;
-}
-interface Report {
-  id: string;
-  messageId: string;
-  room: string;
-  reason: string;
-  reporterId: string;
-  createdAt: string;
+Example posting request (timestamp must be the fresh browser fix timestamp, not this illustration):
+
+```json
+{
+  "content": "Hello from here!",
+  "location": {
+    "latitude": 37.7749,
+    "longitude": -122.4194,
+    "accuracy": 25,
+    "timestamp": 1794412800000
+  }
 }
 ```
 
-`location` is `{latitude:number, longitude:number, accuracy:number, timestamp:number}`. Accuracy is a positive radius in meters, at most 5,000. Timestamp is epoch milliseconds, no more than 60 seconds old or five seconds in the future. The server derives the authoritative `Message.room` at adaptive precision 1–8. Extra `room`/`geohash` parameters are ignored. `POST /rooms/:prefix/messages` is no longer supported (404). Raw location fields are not persisted. Permission denial prevents posting but does not restrict reads.
+Location accuracy must be positive and at most 5,000 meters; timestamp is epoch milliseconds within 60 seconds of receipt, allowing five seconds future skew. Server-derived `originGeohash` always has eight characters. Extra viewing-room parameters are ignored. Room-addressed posting is unsupported. Missing permission/fix prevents posting, not browsing.
 
-Each room returns only its independently retained newest 1,000 posts. There is no time-based message expiration. Canonical content is removed after its last feed copy is evicted. A retry whose receipt survives but whose post is gone returns 410. Reports may reference evicted posts. Deleted tombstones occupy feed slots until count eviction.
+The complete [Post payload and eight precision levels](architecture.md) define shared identity across copies. `postId` is 32 uppercase RFC 4648 Base32 characters; the first two identify its slot. `createdAt` is server ISO UTC time. `displayName` is a non-unique snapshot. Public `authorId` determines ownership, not the name. Location fields are transient; posts expose only the derived origin cell, which can still reveal sensitive whereabouts.
 
-`createdAt` is a server-generated ISO UTC timestamp. Authors' display names are snapshots at post time. Names are non-unique; use IDs for ownership and bans. Deleted messages keep IDs, author metadata and timestamps, but return empty text. All room read endpoints are public, including author IDs.
+`Identity` is `{id,name,moderator}`. `Report` is `{id,postId,originGeohash,authorId,reason,reporterId,createdAt}`. Reasons are trimmed 3–500 characters; names 2–24 letters, digits, spaces or `_ . -`; content is plain text trimmed to 1–2,000 characters. Request bodies are capped at 16,000 characters.
 
-Clients must generate one UUID per intended post and preserve it across network retries. A new UUID means a new post. Obtain a fresh location for each attempt, retaining the UUID across retries even if the viewing room changes. A retry does not move an already accepted post. Slash commands are interpreted by the browser, not persisted as commands. The API accepts plain text including strings beginning with `/` from other clients.
+Room responses contain up to 50 surviving unmoderated posts sorted newest first. Each room stores at most 1,024 slots; there is no promise of the latest 1,024. Cursors are room-specific and not snapshot isolation. Deleted posts are omitted, without tombstones in slots.
 
-Registered-user signup, verification and sign-in use Cognito directly. The deployed `/config.json` provides `region`, `userPoolId`, `userPoolClientId` and `apiUrl`; these are public configuration, not credentials. Tokens are stored in browser localStorage; keep the site free of untrusted script and review CSP/auth storage before expanding integrations. Signing out removes the browser token but does not revoke an already copied guest token. This milestone has no server-side session revocation endpoint.
+Posting is not HTTP-idempotent. There is no client request ID. Obtain a fresh fix on each attempt. Batch retries reuse the server post ID, but retrying an HTTP request can create another post. A 503 can mean partial publication; refresh before retrying. Duplicate text within 30 seconds is rejected as abuse rather than returning a previous result.
+
+Codes include 400 malformed input/location, 401 missing/expired identity, 403 banned/unauthorized or missing request header, 404 unavailable post/route, 413 oversized body, 422 content/location risk, 429 rate/duplicate limit, 503 read-only or incomplete batch, and 500 unexpected dependency failure. Reads of already evicted posts for moderation can return 404.
+
+Guest cookies last 30 days and are reused across visits. Optional Cognito signup/sign-in remains unchanged. Sign-out clears the Cognito token and returns to the existing guest cookie. Cognito token refresh, guest revocation and account/guest merging are not implemented.

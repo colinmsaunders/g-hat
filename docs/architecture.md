@@ -1,79 +1,77 @@
-# Architecture and technical specification
+# Architecture — random room slots (schema v3)
 
-## Product rules
+Read anywhere. Post from your reported current location. The TypeScript monorepo, Lambda HTTP API, DynamoDB, React/Vite, Cognito and CDK remain in place. This revision replaces adaptive precision and newest-1,000 retention. It is implemented locally and has not been deployed.
 
-**Read anywhere. Post from where you are.** Viewing and posting locations are separate. Any visitor may browse a valid geohash room (prefix length 1–8). Every new post is assigned by the server to the location reported by the browser, independently of the viewed URL. Guests remain supported; an account is not required.
+## Eight geographic levels
 
-Each room maintains its own independent **newest 1,000 posts**:
+A room is a lowercase geohash prefix of length 1–8. There is no precision-zero global room. A new post always has a precision-8 origin, regardless of the room being viewed. For origin `c23nb62w`, the eight copies are:
 
-`Room(p) = Newest_1000 { m : m.room starts with p }`
+| Precision | Room partition |
+| --------- | -------------- |
+| 1         | `c`            |
+| 2         | `c2`           |
+| 3         | `c23`          |
+| 4         | `c23n`         |
+| 5         | `c23nb`        |
+| 6         | `c23nb6`       |
+| 7         | `c23nb62`      |
+| 8         | `c23nb62w`     |
 
-A post contributes to its origin and all ancestors, never descendants. Evicting a copy from one room does not evict copies in other rooms. There is **no time-based expiration** of posts or feeds. Quiet rooms retain their remaining posts indefinitely. Ordering is server creation timestamp followed by UUID (a deterministic tie-breaker). Moderation replaces text with a tombstone; tombstones occupy a feed slot until normal count eviction. No older post is backfilled after moderation.
+Each character adds five bits of geographic subdivision. Copies flow upward, never into siblings or descendants. Precision describes the encoded cell, not confidence in the reported location. Accuracy up to 5 km is accepted even though the precision-8 cell is much smaller. This explicitly replaces adaptive posting precision.
 
-These rules supersede the original arbitrary-room posting and indefinite full-history retention design.
+## Post identity and full payload
 
-## Posting location and privacy
+`postId` is 20 cryptographically random bytes encoded most-significant-bit first with RFC 4648 Base32 alphabet `ABCDEFGHIJKLMNOPQRSTUVWXYZ234567`. It is exactly 32 characters with no padding or time component. `slot = postId.slice(0, 2)` has 10 uniform random bits and 1,024 possible values. Geohashes use a different, lowercase alphabet.
 
-On Send, the browser requests `getCurrentPosition` with `maximumAge: 0`, `enableHighAccuracy: true`, and a 15-second timeout. Permission failure preserves the draft and leaves browsing available. The request contains text, a stable retry UUID, latitude, longitude, reported accuracy radius in meters and a timestamp in epoch milliseconds. The destination is `POST /api/messages`; the old room-addressed posting route is removed. Client-supplied `room` or `geohash` fields are ignored.
-
-The server validates finite coordinate ranges, positive accuracy no worse than **5,000 meters**, age no greater than **60 seconds**, and future skew no greater than **5 seconds**. These are explicit initial policy choices, centralized in shared validation. It independently encodes the location and selects the finest precision, up to 8, whose cell width and height are each at least twice the reported accuracy radius. Width is adjusted for latitude using a spherical Earth approximation. If no allowed cell is suitable (for example, very near a pole), the fix is rejected. A 25-meter radius typically selects a coarser cell than precision 8.
-
-This selects an appropriate spatial resolution; it does not guarantee that the uncertainty circle lies within the chosen cell, especially at boundaries. Location, accuracy and timestamp are all untrusted client claims. This deters accidental remote posting and arbitrary destination parameters, **not location spoofing**. Browser geolocation offers no guarantee of the actual physical location. See the [W3C Geolocation specification](https://www.w3.org/TR/geolocation/). IP geolocation checks and native device attestation are not implemented.
-
-Only the derived geohash is stored with messages. Raw coordinates, accuracy and location timestamp are not stored in messages, receipts, sessions, feeds, activity or logs. Coordinates exist transiently in the request and application memory. Do not enable request-body logging upstream. A geohash can itself reveal a sensitive location; this is explained in the posting/help UI. Reports contain user-provided reasons, which may independently contain sensitive information.
-
-After a successful post, the UI shows the authoritative posting room and a link to it. It inserts the post into the viewed feed only when that feed is an ancestor of the actual posting room. Browsing elsewhere does not redirect the post or force navigation. Retries keep their request ID even if the viewer changes rooms; every send attempt obtains a fresh fix. A retry returns the originally accepted post rather than moving it.
-
-## Browsing, identity and delivery
-
-Smart zoom still picks the deepest ancestor with at least three posts in the current and previous three five-minute activity buckets (15–20 minutes). Quiet areas fall back to precision 5 or the supplied shorter prefix. This controls browsing only, not posting precision. Location permission is optional for browsing and required for posting.
-
-Guest tokens are cryptographically random, stored only as SHA-256 hashes on the server, and checked for their 30-day expiration independently of DynamoDB TTL cleanup. Cognito ID tokens are verified for signature, issuer, audience, token use and expiration. Only the `moderators` group grants moderation access. Display names are not unique. The frontend polls every five seconds while visible; history browsing pauses polling.
-
-```mermaid
-flowchart LR
-  Browser --> CloudFront
-  CloudFront -->|assets| S3[Private S3]
-  CloudFront -->|uncached /api/*| API[HTTP API]
-  API --> Lambda[Validate location / derive room]
-  Lambda --> DynamoDB[Atomic bounded room feeds]
-  Browser -->|optional sign-in| Cognito
+```typescript
+interface Post {
+  postId: string; // immutable random identity, 32 uppercase Base32 characters
+  originGeohash: string; // immutable precision-8 server-derived origin
+  authorId: string; // guest:<UUID> or user:<Cognito subject>
+  displayName: string; // non-unique author name snapshot
+  content: string; // trimmed plain text, 1–2,000 characters
+  createdAt: string; // server ISO UTC creation timestamp
+}
 ```
 
-## DynamoDB schema v2
+Every item contains all six fields plus `pk = roomPrefix`, `sk = slot`. The same post ID and payload are copied to all eight prefixes. Identity is distinct from the slot: many unrelated posts can occupy that slot over time. There is no separate canonical body, reference lookup, feed list, receipt or activity bucket.
 
-One encrypted on-demand table with `pk`/`sk`, point-in-time recovery and retain-on-removal. No scans or secondary indexes on request paths.
+## Storage, retention and concurrent writes
 
-| PK                               | SK                           | Attributes                                                | Expiration                         |
-| -------------------------------- | ---------------------------- | --------------------------------------------------------- | ---------------------------------- |
-| `ROOM#<prefix>`                  | `FEED`                       | `keys` (up to 1,000 sorted message sort keys), `revision` | None                               |
-| `ROOM#<prefix>`                  | `MSG#<ISO>#<UUID>`           | Message projection                                        | Count eviction only                |
-| `MESSAGE#<UUID>`                 | `META`                       | `message`, `retainedRooms`, `revision`                    | Deleted when final copy is evicted |
-| `REQUEST#<actor>#<request UUID>` | `META`                       | `messageId` only                                          | TTL after 24 hours                 |
-| `SESSION#<token hash>`           | `META`                       | `identity`, `expiresAt`                                   | TTL after 30 days                  |
-| `USER#<actor>`                   | `META`                       | `banned`                                                  | None                               |
-| `RATE#<scope>#<minute>`          | `META`                       | `count`, `expiresAt`                                      | TTL after 2 minutes                |
-| `ACTIVITY#<prefix>`              | `BUCKET#<five-minute index>` | `count`, `expiresAt`                                      | TTL after bucket end + 20 minutes  |
-| `REPORTS`                        | `REPORT#<ISO>#<UUID>`        | Report reason and references                              | None                               |
+CDK creates `PostsV3` (on-demand, encrypted, retained, PITR, no TTL) and `ControlV3` (on-demand, encrypted, retained, TTL on `expiresAt`). Both use string `pk`/`sk`, with no secondary indexes or explicit sharding.
 
-TTL is used for ephemeral control records, **never message retention**. Reports retain references/reasons even if their subject has been evicted; moderation must tolerate a 404. PITR may retain earlier content according to backup policy.
+After admission, a single batch contains eight unconditional full-item puts. Unprocessed items retry up to seven batch attempts with exponential backoff and jitter; SDK transport retries also apply. Conditions, transactions and revision locks are absent from normal posting. Batch operations overwrite existing items and are not atomic as a group. See [AWS BatchWriteItem semantics](https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_BatchWriteItem.html).
 
-## Atomic retention and concurrency
+A delayed older write may replace a newer one. Zoom levels can disagree. Exhausted retries report 503; some copies may already exist. There is no rollback or API idempotency receipt. Clients should refresh before retrying an uncertain publication; a new accepted HTTP attempt creates a new ID. Retries inside a batch retain the original ID.
 
-For each new post, read up to eight feed metadata records and compute the newest 1,000 keys after insertion. For each evicted key, read its canonical record and remove only the affected rooms from its membership. All feed replacements use optimistic revision conditions. Victim canonical changes use their own revision conditions to coordinate concurrent evictions and moderation.
+A room contains at most 1,024 posts, often fewer while filling. Under independent uniform subsequent post IDs, a post survives n writes to that room with probability `(1023/1024)^n`. Retries of the same ID are correlated and are not independent trials. Room eviction means overwriting one slot; it never triggers deletes elsewhere. There is no FIFO queue, cleanup task, retention TTL or strict newest-wins guarantee. Quiet rooms retain surviving posts indefinitely. Retention between ancestor rooms is independent operationally, but collision events can be correlated because the same slot is used across the eight copies.
 
-One transaction checks the ban, enforces rate limits, records the request receipt, writes the canonical record and surviving new projections, updates activity and feed metadata, deletes evicted projections, and updates/removes their canonical records. There is no eventually consistent trimming window. At maximum precision the transaction uses at most **45 distinct item operations** (29 baseline plus at most eight projection deletes and eight victim canonical changes). A feed metadata item is about 70 KB of sort keys, comfortably below the item limit; aggregate transaction payload stays below 4 MB with current text/key limits. AWS documents [transaction limits and conditional atomicity](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/transaction-apis.html).
+## Reading and moderation
 
-Concurrent modifications fail the conditions, roll back every write, and retry with fresh state up to four attempts. Exhaustion returns 429 and the client retains its request ID. Rate limits are ten posts per identity/minute, thirty per source-IP hash/minute, five guest sessions per source-IP hash/minute, and five reports per identity/minute. Only committed transactions consume the posting counters. Fixed windows can burst across minute boundaries.
+Read every Query page for the requested partition, following `LastEvaluatedKey` through the [DynamoDB 1 MB pagination boundary](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Query.Pagination.html). Query moderation markers separately, filter matching IDs, then sort by `createdAt` descending with `postId` descending as tie-breaker. Return 50 posts and a room-bound timestamp/ID cursor. Cursor pagination is best effort, not a snapshot; concurrent writes can change subsequent pages. Strongly consistent individual queries do not create a multi-page snapshot. Sort-key order is never interpreted as recency.
 
-Deletion loads current canonical membership and updates only retained copies, conditioned on canonical revision and projection existence. This prevents deletion from recreating a previously evicted parent copy. Content is removed from canonical and retained projections atomically. Receipts contain no message body. If a retry references a post already evicted everywhere, return 410 instead of recreating it. A very delayed new write can already fall outside all full feeds; it is accepted and immediately evicted under the same newest-key ordering. Deduplication lasts at least 24 hours; clients must not retry old posts beyond that horizon.
+Deletion/reporting supplies `originGeohash` plus `postId`. The store looks for that exact ID in any surviving ancestor copy. Owner/moderator deletion first writes eight body-free moderation markers, then conditionally deletes each slot only if its `postId` still matches. Replacement posts survive. Markers also hide delayed replays of the deleted ID. Markers and reports have no expiry and can grow beyond the bounded post storage; this deliberate moderation metadata tradeoff needs future retention policy. If all copies have vanished, lookup returns 404. Ban admission blocks future posts; removing already published posts requires targeted deletion.
 
-Reads query a single room, newest first, 50 records per page, strongly consistent. Cursors validate partition/sort keys and are not signed secrets. Pagination is not a frozen snapshot: concurrent eviction can remove entries between pages. Inactive feeds retain their posts indefinitely. Activity includes accepted posts even if later removed; it is an approximate signal, not the retained feed count.
+Smart zoom counts currently surviving, unmoderated posts created in the last 15 minutes, choosing the deepest room with at least three. It does not count historical writes that collided away. It queries up to eight rooms; this avoids additional posting fanout but adds read cost.
 
-## Deployment compatibility and scale
+## Guest identity and admission
 
-The CDK table resource is now `DataV2`, so an existing v1 deployment gets a **new empty table**; the old table is retained, not destroyed or silently reused. The earlier implementation was not deployed in this session. See the deployment guide before updating an external v1 deployment. Populating v2 requires reconstructing each feed's newest 1,000 keys and canonical memberships under a write freeze; copying old items unchanged is invalid.
+Guests receive a 30-day `__Host-geohash_guest` cookie, `Secure; HttpOnly; SameSite=Lax; Path=/`, without a Domain attribute. Only its SHA-256 hash is stored server-side. Local loopback development uses an unprefixed cookie without Secure. Sessions enforce logical expiry even before TTL cleanup. Existing cookies are reused. Optional Cognito ID tokens remain supported and verified; only the moderators group grants moderator rights. Mutations require the custom `x-geohash-request: 1` header; there is no cross-origin CORS permission. This prevents cross-origin form submissions using ambient cookies. Cognito tokens remain in localStorage; guest secrets do not.
 
-This prioritizes exact bounded feeds and straightforward verification over high write throughput. Updating roughly 70 KB of metadata per active ancestor consumes significantly more write capacity than a simple append. Coarse-prefix metadata and canonical records can contend. Load-test latency, throttling, cost and contention before public launch. A future design can use a serialized per-room writer and a different bounded index while preserving the same invariant; asynchronous trimming would weaken it.
+Before any slot write:
 
-CloudFront uses a single browser origin and proxies uncached API traffic. API Gateway source IP behind CloudFront may identify an edge rather than the viewer; source-IP limits are only a conservative shared backstop. Guest identities can be recreated. WAF/viewer-IP controls, traffic testing, moderation operations and alert routing remain launch work. The in-memory store models feed behavior but is not a durability or concurrency emulator; DynamoDB transaction tests use a conditional-write test double, not a live AWS database.
+1. Validate identity, content length, finite coordinate ranges, accuracy `(0,5000]` meters, location age at most 60 seconds and future skew at most five seconds. The browser requests a fresh fix for every Send.
+2. Reject banned identities, control characters and more than five links.
+3. Enforce fixed-window atomic counters: 10 attempts per identity/minute and 30 per hashed connection IP/minute. Guest creation is limited to five per IP/minute; reports to five per identity/minute. Rejected later checks and failed publications can consume attempts. Windows can burst at boundaries.
+4. Check duplicate text within 30 seconds, implied motion above 350 m/s with a 10 km minimum allowance, and A→B→A round trips over 50 km within 15 minutes. Motion uses server receipt times, never client fix timestamps.
+5. Save at most three coarse precision-5 observations, uncertainty allowances, server receipt times and text hashes, expiring logically after 30 minutes. No raw GPS history is persisted. DynamoDB physical TTL deletion is asynchronous. The optional location-risk hook can integrate IP-geolocation evidence; no external service is configured or called.
+
+These are lightweight heuristics, not proof of physical presence. Guest resets and spoofed reports remain possible. Observation updates can race; rate counters are atomic but the whole admission sequence is not a transaction. API Gateway's connection IP behind CloudFront may be an edge IP: its limit is a conservative shared backstop, not verified viewer-IP protection. Do not trust arbitrary forwarded IP headers. Broad content classification, operational moderation and authenticated viewer-IP controls remain gaps. Request bodies and raw coordinates must not be logged.
+
+## Operations and migration
+
+API responses remain uncached; CloudFront read caching is an optional future optimization. A CloudWatch dashboard includes consumed capacity, throttling and Query/BatchWriteItem latency, alongside existing Lambda error alarms. No sharding or local secondary indexes are added. Broad prefixes may get hot; measure before changing partition design. Full-room reads and accumulating moderation markers need load/cost testing. Alert notification routing is still operational work.
+
+Schema v3 uses new empty tables. Removing the old `DataV2` CDK resource retains its physical table under its existing retention policy. Legacy data is neither converted nor silently mixed into slots. Existing guest bearer sessions are replaced by new cookie sessions. API contracts change together with the frontend; deploy as a coordinated update with downtime permitted. Existing region-copy scripts describe schema v2 only and must not be used as a v3 migration.
+
+The current recorded deployment targets AWS account **451261323611**, application region **us-west-2**, with the global edge/certificate stack in us-east-1. This task does not deploy or change AWS authentication. At a future deployment, verify caller identity, deploy the western backend, refresh the recorded table outputs, then coordinate edge assets/config. Old retained data and backup disposal are separate explicit operations.

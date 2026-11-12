@@ -1,110 +1,85 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   DynamoDBDocumentClient,
-  GetCommand,
-  TransactWriteCommand,
+  BatchWriteCommand,
+  QueryCommand,
+  DeleteCommand,
 } from "@aws-sdk/lib-dynamodb";
-import { ancestors } from "@geohash-chat/shared";
 import { DynamoStore } from "../apps/api/src/dynamo";
-const message = {
-  id: "e545bb7e-5f05-4c44-b148-278e6b069285",
-  room: "9q8yyk8y",
-  authorId: "guest:alice",
-  name: "Alice",
-  text: "A local discovery",
-  createdAt: "2026-11-09T12:00:00.000Z",
+const post = {
+  postId: "A".repeat(32),
+  originGeohash: "c23nb62w",
+  content: "Hello",
+  authorId: "guest:a",
+  displayName: "A",
+  createdAt: "2026-11-11T12:00:00.000Z",
 };
 afterEach(() => vi.restoreAllMocks());
-describe("DynamoDB write invariants", () => {
-  it("uses one atomic transaction for all eight feeds, activity, deduplication and abuse limits", async () => {
-    let transaction: any;
-    vi.spyOn(DynamoDBDocumentClient.prototype, "send").mockImplementation(
-      (async (command: any) => {
-        if (command instanceof GetCommand) return {};
-        if (command instanceof TransactWriteCommand) {
-          transaction = command.input;
-          return {};
-        }
-        throw Error("Unexpected command");
-      }) as any,
-    );
-    await new DynamoStore("table").post(message, "request-id", "ip-hash");
-    const writes = transaction.TransactItems;
-    expect(writes).toHaveLength(29);
-    expect(
-      writes.filter(
-        (w: any) =>
-          w.Put?.Item.pk.startsWith("ROOM#") &&
-          w.Put?.Item.sk.startsWith("MSG#"),
-      ),
-    ).toHaveLength(8);
-    expect(
-      writes.filter((w: any) => w.Update?.Key.pk.startsWith("ACTIVITY#")),
-    ).toHaveLength(8);
-    expect(writes.filter((w: any) => w.ConditionCheck)).toHaveLength(1);
-    expect(
-      writes
-        .filter((w: any) => w.Update?.Key.pk.startsWith("RATE#"))
-        .every((w: any) => Boolean(w.Update.ConditionExpression)),
-    ).toBe(true);
-    const receipt = writes.find((w: any) =>
-      w.Put?.Item.pk.startsWith("REQUEST#"),
-    ).Put;
-    expect(receipt.ConditionExpression).toBe("attribute_not_exists(pk)");
-    expect(receipt.Item.messageId).toBe(message.id);
-    expect(receipt.Item.message).toBeUndefined();
-    const keys = writes.map((w: any) => {
-      const item = w.Put?.Item ?? w.Update?.Key ?? w.ConditionCheck?.Key;
-      return `${item.pk}/${item.sk}`;
+it("makes eight unconditional denormalized writes and retries only unprocessed items", async () => {
+  const calls: any[] = [];
+  vi.spyOn(DynamoDBDocumentClient.prototype, "send").mockImplementation((async (
+    c: any,
+  ) => {
+    expect(c).toBeInstanceOf(BatchWriteCommand);
+    calls.push(c.input);
+    return calls.length === 1
+      ? { UnprocessedItems: { posts: [c.input.RequestItems.posts[3]] } }
+      : {};
+  }) as any);
+  await new DynamoStore("posts", "control").post(post);
+  expect(calls[0].RequestItems.posts).toHaveLength(8);
+  expect(calls[1].RequestItems.posts).toEqual([calls[0].RequestItems.posts[3]]);
+  for (const [i, w] of calls[0].RequestItems.posts.entries())
+    expect(w).toEqual({
+      PutRequest: {
+        Item: { ...post, pk: post.originGeohash.slice(0, i + 1), sk: "AA" },
+      },
     });
-    expect(new Set(keys).size).toBe(29);
-  });
-  it("atomically removes text from canonical storage and every ancestor", async () => {
-    let writes: any[] = [];
-    vi.spyOn(DynamoDBDocumentClient.prototype, "send").mockImplementation(
-      (async (command: any) => {
-        if (command instanceof GetCommand)
-          return {
-            Item: {
-              message,
-              retainedRooms: ancestors(message.room),
-              revision: 1,
-            },
-          };
-        writes = command.input.TransactItems;
-        return {};
-      }) as any,
-    );
-    await new DynamoStore("table").remove(message);
-    expect(writes).toHaveLength(9);
-    for (const w of writes) {
-      expect(w.Put.Item.message.text).toBe("");
-      expect(w.Put.Item.message.deleted).toBe(true);
-    }
-  });
-  it("returns the winning message after a concurrent duplicate transaction", async () => {
-    let attempted = false;
-    vi.spyOn(DynamoDBDocumentClient.prototype, "send").mockImplementation(
-      (async (command: any) => {
-        if (command instanceof GetCommand) {
-          if (command.input.Key!.pk.startsWith("REQUEST#"))
-            return attempted ? { Item: { messageId: message.id } } : {};
-          if (command.input.Key!.pk.startsWith("MESSAGE#"))
-            return { Item: { message } };
-          return {};
-        }
-        attempted = true;
-        throw Object.assign(Error("Transaction cancelled"), {
-          name: "TransactionCanceledException",
-        });
-      }) as any,
-    );
-    expect(
-      await new DynamoStore("table").post(
-        { ...message, id: "new-id" },
-        "request-id",
-        "ip-hash",
-      ),
-    ).toEqual(message);
-  });
+});
+it("reads every DynamoDB page, filters moderation and sorts timestamps rather than slots", async () => {
+  let pages = 0;
+  vi.spyOn(DynamoDBDocumentClient.prototype, "send").mockImplementation((async (
+    c: any,
+  ) => {
+    expect(c).toBeInstanceOf(QueryCommand);
+    if (c.input.TableName === "control")
+      return { Items: [{ sk: "BB" + "A".repeat(30) }] };
+    pages++;
+    if (pages === 1)
+      return {
+        Items: [{ ...post, pk: "c", sk: "AA" }],
+        LastEvaluatedKey: { pk: "c", sk: "AA" },
+      };
+    expect(c.input.ExclusiveStartKey).toEqual({ pk: "c", sk: "AA" });
+    return {
+      Items: [
+        {
+          ...post,
+          postId: "ZZ" + "A".repeat(30),
+          createdAt: "2026-11-11T13:00:00.000Z",
+        },
+        { ...post, postId: "BB" + "A".repeat(30) },
+      ],
+    };
+  }) as any);
+  const page = await new DynamoStore("posts", "control").list("c");
+  expect(pages).toBe(2);
+  expect(page.posts.map((p) => p.postId.slice(0, 2))).toEqual(["ZZ", "AA"]);
+});
+it("guards moderation deletes by exact post ID and tolerates replaced slots", async () => {
+  let deletes = 0;
+  vi.spyOn(DynamoDBDocumentClient.prototype, "send").mockImplementation((async (
+    c: any,
+  ) => {
+    if (c instanceof BatchWriteCommand) return {};
+    expect(c).toBeInstanceOf(DeleteCommand);
+    expect(c.input.ConditionExpression).toBe("postId = :id");
+    expect(c.input.ExpressionAttributeValues[":id"]).toBe(post.postId);
+    deletes++;
+    throw Object.assign(new Error(), {
+      name: "ConditionalCheckFailedException",
+    });
+  }) as any);
+  await new DynamoStore("posts", "control").remove(post);
+  expect(deletes).toBe(8);
 });

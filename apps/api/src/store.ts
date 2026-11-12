@@ -1,4 +1,11 @@
-import type { Identity, Message, Page } from "@geohash-chat/shared";
+import { z } from "zod";
+import {
+  postIdSchema,
+  postSlot,
+  type Identity,
+  type Post,
+  type Page,
+} from "@geohash-chat/shared";
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -11,10 +18,17 @@ export interface Session {
   identity: Identity;
   expiresAt: number;
 }
+export interface Observation {
+  geohash: string;
+  accuracy: number;
+  receivedAt: number;
+  contentHash: string;
+}
 export interface Report {
   id: string;
-  messageId: string;
-  room: string;
+  postId: string;
+  originGeohash: string;
+  authorId: string;
   reason: string;
   reporterId: string;
   createdAt: string;
@@ -23,49 +37,99 @@ export interface Store {
   guest(tokenHash: string, session: Session, ip: string): Promise<void>;
   session(tokenHash: string): Promise<Session | undefined>;
   rename(tokenHash: string, name: string): Promise<void>;
-  list(room: string, cursor?: string): Promise<Page>;
-  post(message: Message, requestId: string, ip: string): Promise<Message>;
-  get(id: string): Promise<Message | undefined>;
-  remove(message: Message): Promise<void>;
+  rate(scope: string, limit: number, now: number): Promise<void>;
+  observations(actor: string, now: number): Promise<Observation[]>;
+  observe(
+    actor: string,
+    observations: Observation[],
+    now: number,
+  ): Promise<void>;
+  isBanned(actor: string): Promise<boolean>;
+  list(room: string, cursor?: string, limit?: number): Promise<Page>;
+  post(post: Post): Promise<void>;
+  get(originGeohash: string, postId: string): Promise<Post | undefined>;
+  remove(post: Post): Promise<void>;
   report(report: Report): Promise<void>;
   reports(cursor?: string): Promise<{ reports: Report[]; cursor?: string }>;
   ban(id: string, banned: boolean): Promise<void>;
-  counts(rooms: string[]): Promise<Record<string, number>>;
+  counts(rooms: string[], now?: number): Promise<Record<string, number>>;
 }
-export const digestKey = (room: string, m: Message) => ({
-  pk: `ROOM#${room}`,
-  sk: `MSG#${m.createdAt}#${m.id}`,
+export const slotKey = (room: string, postId: string) => ({
+  pk: room,
+  sk: postSlot(postId),
 });
-export const bucket = (time = Date.now()) => Math.floor(time / 300000);
-export function cursorEncode(key: Record<string, unknown>) {
-  return Buffer.from(JSON.stringify(key)).toString("base64url");
+export const OBSERVATION_TTL_SECONDS = 30 * 60;
+export function cursorEncode(value: Record<string, unknown>) {
+  return Buffer.from(JSON.stringify(value)).toString("base64url");
 }
-export function cursorDecode(
-  value: string | undefined,
-  pk: string,
-): Record<string, string> | undefined {
-  if (!value) return undefined;
+export function decodeCursor(value: string): unknown {
   try {
     if (value.length > 1000) throw Error();
-    const key = JSON.parse(Buffer.from(value, "base64url").toString());
-    if (
-      key.pk !== pk ||
-      typeof key.sk !== "string" ||
-      !key.sk.startsWith(pk === "REPORTS" ? "REPORT#" : "MSG#") ||
-      Object.keys(key).length !== 2
-    )
-      throw Error();
-    return key;
+    return JSON.parse(Buffer.from(value, "base64url").toString());
   } catch {
     throw new ApiError(400, "Invalid pagination cursor.");
   }
 }
-
-/** Sort keys preserve timestamp + UUID ordering without storing message bodies in feed metadata. */
-export function feedPlan(keys: string[], key: string, capacity = 1000) {
-  const ordered = [...new Set([...keys, key])].sort();
+export function reportCursor(
+  value?: string,
+): Record<string, string> | undefined {
+  if (!value) return;
+  const parsed = z
+    .object({ pk: z.literal("REPORTS"), sk: z.string().startsWith("REPORT#") })
+    .strict()
+    .safeParse(decodeCursor(value));
+  if (!parsed.success) throw new ApiError(400, "Invalid pagination cursor.");
+  return parsed.data;
+}
+const positionSchema = z
+  .object({
+    room: z.string(),
+    createdAt: z.iso.datetime(),
+    postId: postIdSchema,
+  })
+  .strict();
+export function comparePosts(a: Post, b: Post) {
+  return a.createdAt === b.createdAt
+    ? a.postId > b.postId
+      ? -1
+      : a.postId === b.postId
+        ? 0
+        : 1
+    : a.createdAt > b.createdAt
+      ? -1
+      : 1;
+}
+/** Exhaust slot pagination and filter moderation BEFORE sorting and selecting a recency page. */
+export function pagePosts(
+  posts: Post[],
+  blocked: Set<string>,
+  room: string,
+  cursor?: string,
+  limit = 50,
+): Page {
+  let before: z.infer<typeof positionSchema> | undefined;
+  if (cursor) {
+    const parsed = positionSchema.safeParse(decodeCursor(cursor));
+    if (!parsed.success || parsed.data.room !== room)
+      throw new ApiError(400, "Invalid pagination cursor.");
+    before = parsed.data;
+  }
+  const available = posts
+    .filter(
+      (p) =>
+        !blocked.has(p.postId) &&
+        (!before ||
+          p.createdAt < before.createdAt ||
+          (p.createdAt === before.createdAt && p.postId < before.postId)),
+    )
+    .sort(comparePosts);
+  const selected = available.slice(0, limit);
+  const last = selected.at(-1);
   return {
-    kept: ordered.slice(-capacity),
-    evicted: ordered.slice(0, Math.max(0, ordered.length - capacity)),
+    posts: selected,
+    cursor:
+      available.length > limit && last
+        ? cursorEncode({ room, createdAt: last.createdAt, postId: last.postId })
+        : undefined,
   };
 }

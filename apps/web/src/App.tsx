@@ -5,7 +5,7 @@ import {
   command,
   encode,
   type Identity,
-  type Message,
+  type Post,
   type Page,
 } from "@geohash-chat/shared";
 import { api, config, ensureGuest, sessionKey } from "./api";
@@ -35,7 +35,7 @@ function initialRoom() {
 export default function App() {
   const [room, setRoom] = useState(initialRoom);
   const [user, setUser] = useState<Identity>();
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<Post[]>([]);
   const [cursor, setCursor] = useState<string>();
   const [draft, setDraft] = useState("");
   const [join, setJoin] = useState("");
@@ -49,7 +49,6 @@ export default function App() {
   const [locating, setLocating] = useState(false);
   const [historyPage, setHistoryPage] = useState(false);
   const historyMode = useRef(false);
-  const pending = useRef<{ text: string; id: string } | undefined>(undefined);
   const currentRoom = useRef(room);
   currentRoom.current = room;
   const end = useRef<HTMLDivElement>(null);
@@ -85,7 +84,7 @@ export default function App() {
         const page = await api<Page>(`/rooms/${room}/messages`);
         if (stopped || serial !== generation.current || historyMode.current)
           return;
-        setMessages(page.messages);
+        setMessages(page.posts);
         setCursor(page.cursor);
       } catch (e) {
         if (!stopped) setError((e as Error).message);
@@ -152,30 +151,31 @@ export default function App() {
         return;
       }
       setSending(true);
-      if (!pending.current || pending.current.text !== draft)
-        pending.current = { text: draft, id: crypto.randomUUID() };
       const location = await freshPostingLocation();
-      const result = await api<Message>("/messages", {
+      const result = await api<Post>("/messages", {
         method: "POST",
         body: JSON.stringify({
-          text: draft,
-          requestId: pending.current.id,
+          content: draft,
           location,
         }),
       });
-      pending.current = undefined;
       setDraft("");
-      setPostedRoom(result.room);
+      setPostedRoom(result.originGeohash);
       setNotice(
-        `Posted from #${result.room}. Your viewing room does not determine where you post.`,
+        `Posted from #${result.originGeohash}. Your viewing room does not determine where you post.`,
       );
       if (
         currentRoom.current &&
-        result.room.startsWith(currentRoom.current) &&
+        result.originGeohash.startsWith(currentRoom.current) &&
         !historyMode.current
       ) {
         setMessages((old) =>
-          [result, ...old.filter((m) => m.id !== result.id)].slice(0, 50),
+          [
+            result,
+            ...old.filter(
+              (m) => m.postId.slice(0, 2) !== result.postId.slice(0, 2),
+            ),
+          ].slice(0, 50),
         );
         setTimeout(
           () =>
@@ -192,25 +192,25 @@ export default function App() {
       setSending(false);
     }
   }
-  async function remove(m: Message) {
+  async function remove(m: Post) {
     try {
-      await api(`/messages/${m.id}`, { method: "DELETE" });
-      setMessages((old) =>
-        old.map((x) => (x.id === m.id ? { ...x, deleted: true, text: "" } : x)),
-      );
+      await api(`/messages/${m.postId}?originGeohash=${m.originGeohash}`, {
+        method: "DELETE",
+      });
+      setMessages((old) => old.filter((x) => x.postId !== m.postId));
     } catch (e) {
       setError((e as Error).message);
     }
   }
-  async function report(m: Message) {
+  async function report(m: Post) {
     const reason = window.prompt(
       "What should a moderator know about this message?",
     );
     if (!reason) return;
     try {
-      await api(`/messages/${m.id}/reports`, {
+      await api(`/messages/${m.postId}/reports`, {
         method: "POST",
-        body: JSON.stringify({ reason }),
+        body: JSON.stringify({ reason, originGeohash: m.originGeohash }),
       });
       setNotice("Report sent for moderator review.");
     } catch (e) {
@@ -226,7 +226,7 @@ export default function App() {
       if (currentRoom.current !== destination) return;
       historyMode.current = true;
       setHistoryPage(true);
-      setMessages(page.messages);
+      setMessages(page.posts);
       setCursor(page.cursor);
       setNotice("Browsing older messages. Return to live to see new messages.");
     } catch (e) {
@@ -236,7 +236,8 @@ export default function App() {
   const box = room ? bounds(room) : undefined;
   const sorted = [...messages].sort(
     (a, b) =>
-      a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+      a.createdAt.localeCompare(b.createdAt) ||
+      a.postId.localeCompare(b.postId),
   );
   return (
     <div className="shell">
@@ -416,8 +417,7 @@ export default function App() {
               <section className="chat-panel" aria-label="Room conversation">
                 <div className="chat-top">
                   <strong>
-                    The conversation{" "}
-                    <span>{messages.filter((m) => !m.deleted).length}</span>
+                    The conversation <span>{messages.length}</span>
                   </strong>
                   <small>
                     <i className="live-dot" />{" "}
@@ -474,14 +474,14 @@ export default function App() {
                     sorted.map((m) => (
                       <article
                         className={`message ${m.authorId === user?.id ? "own" : ""}`}
-                        key={m.id}
+                        key={m.postId}
                       >
                         <span className="avatar">
-                          {m.name.slice(0, 1).toUpperCase()}
+                          {m.displayName.slice(0, 1).toUpperCase()}
                         </span>
                         <div className="message-body">
                           <div className="message-meta">
-                            <strong>{m.name}</strong>
+                            <strong>{m.displayName}</strong>
                             {m.authorId === user?.id && <small>you</small>}
                             <time
                               dateTime={m.createdAt}
@@ -492,16 +492,14 @@ export default function App() {
                                 minute: "2-digit",
                               })}
                             </time>
-                            {m.room !== room && (
-                              <button onClick={() => go(m.room)}>
-                                #{m.room} ↗
+                            {m.originGeohash !== room && (
+                              <button onClick={() => go(m.originGeohash)}>
+                                #{m.originGeohash} ↗
                               </button>
                             )}
                           </div>
-                          <p className={m.deleted ? "deleted" : ""}>
-                            {m.deleted ? "Message removed" : m.text}
-                          </p>
-                          {!m.deleted && (
+                          <p>{m.content}</p>
+                          {
                             <div className="message-actions">
                               <button onClick={() => report(m)}>Report</button>
                               {(m.authorId === user?.id || user?.moderator) && (
@@ -510,7 +508,7 @@ export default function App() {
                                 </button>
                               )}
                             </div>
-                          )}
+                          }
                         </div>
                       </article>
                     ))
@@ -519,8 +517,8 @@ export default function App() {
                 </div>
                 <form className="composer" onSubmit={send}>
                   <p className="posting-rule">
-                    Read anywhere. Posting shares your approximate current
-                    location publicly.
+                    Read anywhere. Posting shares your reported location
+                    publicly in a small geographic cell.
                   </p>
                   <label className="sr-only" htmlFor="message">
                     Post from your current location
@@ -703,9 +701,11 @@ export default function App() {
             <p className="muted">
               Location is optional for browsing and required for posting.
               Posting sends coordinates, accuracy and timestamp for server
-              validation; only the derived geohash is stored. Browser locations
-              can be spoofed. Each room keeps its newest 1,000 posts with no
-              time expiry. Guest sessions last 30 days; names are not unique.
+              validation; posts store a precision-8 geohash. Coarse abuse
+              observations expire after 30 minutes. Browser locations can be
+              spoofed. Each room holds up to 1,024 posts; random collisions
+              replace posts, with no time expiry. Guest sessions last 30 days;
+              names are not unique.
             </p>
           </section>
         </div>

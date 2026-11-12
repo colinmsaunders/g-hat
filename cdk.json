@@ -1,1 +1,18 @@
-{ "app": "npx tsx infra/app.ts" }
+{
+  "app": "npx tsx infra/app.ts",
+  "context": {
+    "domain": "geohash.chat",
+    "hostedZoneId": "Z08536772NCQUP6FKL46V",
+    "enableWest": true,
+    "westReadOnly": false,
+    "eastReadOnly": true,
+    "backendTarget": {
+      "region": "us-west-2",
+      "apiId": "ymhbg71uhi",
+      "bucketName": "geohashchatwest-webassets27872646-6guc1kzkq0jh",
+      "tableName": "GeohashChatWest-DataV2EEC63B81-178OTVYFGQLZV",
+      "userPoolId": "us-west-2_PKHMWnh4F",
+      "userPoolClientId": "1215ki1iqhuo85lr7a1eems4v9"
+    }
+  }
+}

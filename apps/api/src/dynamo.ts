@@ -5,409 +5,300 @@ import {
   PutCommand,
   QueryCommand,
   UpdateCommand,
-  TransactWriteCommand,
-  BatchGetCommand,
-  type TransactWriteCommandInput,
+  DeleteCommand,
+  BatchWriteCommand,
+  type BatchWriteCommandInput,
 } from "@aws-sdk/lib-dynamodb";
-import { ROOM_CAPACITY, ancestors, type Message } from "@geohash-chat/shared";
+import {
+  ancestors,
+  originSchema,
+  postIdSchema,
+  type Post,
+} from "@geohash-chat/shared";
 import {
   ApiError,
-  bucket,
-  cursorDecode,
+  OBSERVATION_TTL_SECONDS,
   cursorEncode,
-  digestKey,
-  feedPlan,
-  type Report,
-  type Session,
+  reportCursor,
+  pagePosts,
+  slotKey,
   type Store,
+  type Session,
+  type Observation,
+  type Report,
 } from "./store";
-const client = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
-  marshallOptions: { removeUndefinedValues: true },
-});
-type Write = NonNullable<TransactWriteCommandInput["TransactItems"]>[number];
+const client = DynamoDBDocumentClient.from(
+  new DynamoDBClient({ maxAttempts: 3 }),
+  { marshallOptions: { removeUndefinedValues: true } },
+);
+type Writes = NonNullable<BatchWriteCommandInput["RequestItems"]>[string];
 export class DynamoStore implements Store {
-  constructor(private table: string) {}
-  async read(pk: string, sk = "META") {
+  constructor(
+    private postsTable: string,
+    private controlTable: string,
+  ) {}
+  private async readControl(pk: string, sk = "META") {
     return (
       await client.send(
         new GetCommand({
-          TableName: this.table,
+          TableName: this.controlTable,
           Key: { pk, sk },
           ConsistentRead: true,
         }),
       )
     ).Item;
   }
-  rate(key: string, max: number): Write {
-    return {
-      Update: {
-        TableName: this.table,
-        Key: {
-          pk: `RATE#${key}#${Math.floor(Date.now() / 60000)}`,
-          sk: "META",
-        },
+  async rate(scope: string, limit: number, now: number) {
+    const result = await client.send(
+      new UpdateCommand({
+        TableName: this.controlTable,
+        Key: { pk: `RATE#${scope}#${Math.floor(now / 60000)}`, sk: "META" },
         UpdateExpression: "SET expiresAt = :ttl ADD #n :one",
-        ConditionExpression: "attribute_not_exists(#n) OR #n < :max",
         ExpressionAttributeNames: { "#n": "count" },
         ExpressionAttributeValues: {
-          ":ttl": Math.floor(Date.now() / 1000) + 120,
+          ":ttl": Math.floor(now / 1000) + 120,
           ":one": 1,
-          ":max": max,
         },
-      },
-    };
+        ReturnValues: "UPDATED_NEW",
+      }),
+    );
+    if ((result.Attributes?.count ?? Infinity) > limit)
+      throw new ApiError(429, "Slow down and try again in a minute.");
   }
-  async transaction(items: Write[]) {
-    await client.send(new TransactWriteCommand({ TransactItems: items }));
+  async guest(tokenHash: string, session: Session, ip: string) {
+    await this.rate(`guest:${ip}`, 5, Date.now());
+    await client.send(
+      new PutCommand({
+        TableName: this.controlTable,
+        Item: { pk: `SESSION#${tokenHash}`, sk: "META", ...session },
+      }),
+    );
   }
-  async guest(token: string, session: Session, ip: string) {
-    try {
-      await this.transaction([
-        this.rate(`guest#${ip}`, 5),
-        {
-          Put: {
-            TableName: this.table,
-            Item: { pk: `SESSION#${token}`, sk: "META", ...session },
-          },
-        },
-      ]);
-    } catch (e) {
-      if ((e as Error).name === "TransactionCanceledException")
-        throw new ApiError(
-          429,
-          "Too many guest sessions. Try again in a minute.",
-        );
-      throw e;
-    }
-  }
-  async session(token: string) {
-    const item = await this.read(`SESSION#${token}`);
-    return item
-      ? ({ identity: item.identity, expiresAt: item.expiresAt } as Session)
+  async session(tokenHash: string): Promise<Session | undefined> {
+    const record = await this.readControl(`SESSION#${tokenHash}`);
+    return record
+      ? { identity: record.identity, expiresAt: record.expiresAt }
       : undefined;
   }
-  async rename(token: string, name: string) {
+  async rename(tokenHash: string, name: string) {
+    const session = await this.session(tokenHash);
+    if (!session || session.expiresAt <= Date.now() / 1000)
+      throw new ApiError(401, "Guest session expired.");
     await client.send(
-      new UpdateCommand({
-        TableName: this.table,
-        Key: { pk: `SESSION#${token}`, sk: "META" },
-        UpdateExpression: "SET #identity.#name = :name",
-        ConditionExpression: "attribute_exists(pk) AND expiresAt > :now",
-        ExpressionAttributeNames: { "#identity": "identity", "#name": "name" },
-        ExpressionAttributeValues: {
-          ":name": name,
-          ":now": Math.floor(Date.now() / 1000),
+      new PutCommand({
+        TableName: this.controlTable,
+        Item: {
+          pk: `SESSION#${tokenHash}`,
+          sk: "META",
+          ...session,
+          identity: { ...session.identity, name },
         },
       }),
     );
   }
-  async list(room: string, cursor?: string) {
-    const out = await client.send(
-      new QueryCommand({
-        TableName: this.table,
-        KeyConditionExpression: "pk = :pk AND begins_with(sk, :prefix)",
-        ExpressionAttributeValues: { ":pk": `ROOM#${room}`, ":prefix": "MSG#" },
-        ScanIndexForward: false,
-        ConsistentRead: true,
-        Limit: 50,
-        ExclusiveStartKey: cursorDecode(cursor, `ROOM#${room}`),
+  async observations(actor: string, now: number): Promise<Observation[]> {
+    const r = await this.readControl(`OBS#${actor}`);
+    return r && r.expiresAt > now / 1000 ? r.observations : [];
+  }
+  async observe(actor: string, observations: Observation[], now: number) {
+    await client.send(
+      new PutCommand({
+        TableName: this.controlTable,
+        Item: {
+          pk: `OBS#${actor}`,
+          sk: "META",
+          observations: observations.slice(-3),
+          expiresAt: Math.floor(now / 1000) + OBSERVATION_TTL_SECONDS,
+        },
       }),
     );
-    return {
-      messages: (out.Items ?? []).map((i) => i.message as Message),
-      cursor: out.LastEvaluatedKey
-        ? cursorEncode(out.LastEvaluatedKey)
-        : undefined,
-    };
   }
-  async replay(id: string) {
-    const message = await this.get(id);
-    if (!message)
-      throw new ApiError(
-        410,
-        "This post was already accepted and has since been evicted.",
-      );
-    return message;
+  async isBanned(actor: string) {
+    return (await this.readControl(`USER#${actor}`))?.banned === true;
   }
-  versionCondition(revision: number | undefined) {
-    return revision === undefined
-      ? { ConditionExpression: "attribute_not_exists(pk)" }
-      : {
-          ConditionExpression: "revision = :revision",
-          ExpressionAttributeValues: { ":revision": revision },
-        };
+  async ban(actor: string, banned: boolean) {
+    await client.send(
+      new PutCommand({
+        TableName: this.controlTable,
+        Item: { pk: `USER#${actor}`, sk: "META", banned },
+      }),
+    );
   }
-  async post(m: Message, requestId: string, ip: string): Promise<Message> {
-    const receipt = `REQUEST#${m.authorId}#${requestId}`;
-    const prefixes = ancestors(m.room);
-    for (let attempt = 0; attempt < 4; attempt++) {
-      const previous = await this.read(receipt);
-      if (previous) return this.replay(previous.messageId);
-      const states = await Promise.all(
-        prefixes.map((p) => this.read(`ROOM#${p}`, "FEED")),
+  private async batch(table: string, writes: Writes) {
+    let pending = writes;
+    for (let attempt = 0; attempt < 7; attempt++) {
+      const out = await client.send(
+        new BatchWriteCommand({ RequestItems: { [table]: pending } }),
       );
-      const plans = prefixes.map((p, i) => ({
-        room: p,
-        state: states[i],
-        ...feedPlan(states[i]?.keys ?? [], digestKey(p, m).sk, ROOM_CAPACITY),
-      }));
-      const retainedRooms = plans
-        .filter((p) => p.kept.includes(digestKey(p.room, m).sk))
-        .map((p) => p.room);
-      const victims = new Map<string, string[]>();
-      for (const plan of plans)
-        for (const key of plan.evicted) {
-          const id = key.slice(-36);
-          if (id !== m.id)
-            victims.set(id, [...(victims.get(id) ?? []), plan.room]);
-        }
-      const records = await Promise.all(
-        [...victims.keys()].map(
-          async (id) => [id, await this.read(`MESSAGE#${id}`)] as const,
-        ),
-      );
-      // A concurrent eviction may have removed a victim; reload the room revisions.
-      if (records.some(([, record]) => !record)) continue;
-      const writes: Write[] = [
-        {
-          ConditionCheck: {
-            TableName: this.table,
-            Key: { pk: `USER#${m.authorId}`, sk: "META" },
-            ConditionExpression:
-              "attribute_not_exists(banned) OR banned = :false",
-            ExpressionAttributeValues: { ":false": false },
-          },
-        },
-        this.rate(`user#${m.authorId}`, 10),
-        this.rate(`ip#${ip}`, 30),
-        {
-          Put: {
-            TableName: this.table,
-            Item: {
-              pk: receipt,
-              sk: "META",
-              messageId: m.id,
-              expiresAt: Math.floor(Date.now() / 1000) + 86400,
-            },
-            ConditionExpression: "attribute_not_exists(pk)",
-          },
-        },
-      ];
-      if (retainedRooms.length)
-        writes.push({
-          Put: {
-            TableName: this.table,
-            Item: {
-              pk: `MESSAGE#${m.id}`,
-              sk: "META",
-              message: m,
-              retainedRooms,
-              revision: 1,
-            },
-            ConditionExpression: "attribute_not_exists(pk)",
-          },
-        });
-      for (const plan of plans) {
-        writes.push({
-          Put: {
-            TableName: this.table,
-            Item: {
-              pk: `ROOM#${plan.room}`,
-              sk: "FEED",
-              keys: plan.kept,
-              revision: (plan.state?.revision ?? 0) + 1,
-            },
-            ...this.versionCondition(plan.state?.revision),
-          },
-        });
-        if (retainedRooms.includes(plan.room))
-          writes.push({
-            Put: {
-              TableName: this.table,
-              Item: { ...digestKey(plan.room, m), message: m },
-            },
-          });
-        for (const key of plan.evicted)
-          if (key.slice(-36) !== m.id)
-            writes.push({
-              Delete: {
-                TableName: this.table,
-                Key: { pk: `ROOM#${plan.room}`, sk: key },
-              },
-            });
-        writes.push({
-          Update: {
-            TableName: this.table,
-            Key: { pk: `ACTIVITY#${plan.room}`, sk: `BUCKET#${bucket()}` },
-            UpdateExpression: "SET expiresAt = :ttl ADD #n :one",
-            ExpressionAttributeNames: { "#n": "count" },
-            ExpressionAttributeValues: {
-              ":ttl": (bucket() + 5) * 300,
-              ":one": 1,
-            },
-          },
-        });
-      }
-      for (const [id, record] of records) {
-        const remaining = (record!.retainedRooms as string[]).filter(
-          (p) => !victims.get(id)!.includes(p),
+      pending = out.UnprocessedItems?.[table] ?? [];
+      if (!pending.length) return;
+      if (attempt < 6)
+        await new Promise((resolve) =>
+          setTimeout(
+            resolve,
+            Math.min(1000, 25 * 2 ** attempt) + Math.floor(Math.random() * 25),
+          ),
         );
-        const condition = this.versionCondition(record!.revision);
-        if (remaining.length)
-          writes.push({
-            Put: {
-              TableName: this.table,
-              Item: {
-                ...record,
-                retainedRooms: remaining,
-                revision: record!.revision + 1,
-              },
-              ...condition,
-            },
-          });
-        else
-          writes.push({
-            Delete: {
-              TableName: this.table,
-              Key: { pk: `MESSAGE#${id}`, sk: "META" },
-              ...condition,
-            },
-          });
-      }
-      try {
-        await this.transaction(writes);
-        return m;
-      } catch (error) {
-        if ((error as Error).name !== "TransactionCanceledException")
-          throw error;
-        const replay = await this.read(receipt);
-        if (replay) return this.replay(replay.messageId);
-        if ((await this.read(`USER#${m.authorId}`))?.banned)
-          throw new ApiError(403, "This identity is banned.");
-        if (attempt < 3)
-          await new Promise((resolve) =>
-            setTimeout(resolve, 25 * 2 ** attempt),
-          );
-      }
     }
     throw new ApiError(
-      429,
-      "Posting is busy or rate limited. Retry with the same request ID.",
+      503,
+      "Publication or moderation is incomplete; some copies may remain. Refresh before retrying.",
     );
   }
-  async get(id: string) {
-    return (await this.read(`MESSAGE#${id}`))?.message as Message | undefined;
+  async post(post: Post) {
+    originSchema.parse(post.originGeohash);
+    postIdSchema.parse(post.postId);
+    // Exactly eight independent unconditional full-body puts. Delayed overwrites are intentional.
+    await this.batch(
+      this.postsTable,
+      ancestors(post.originGeohash).map((room) => ({
+        PutRequest: { Item: { ...slotKey(room, post.postId), ...post } },
+      })),
+    );
   }
-  async remove(m: Message) {
-    for (let attempt = 0; attempt < 4; attempt++) {
-      const record = await this.read(`MESSAGE#${m.id}`);
-      if (!record) return;
-      const deleted = { ...record.message, text: "", deleted: true };
-      const writes: Write[] = [
-        {
-          Put: {
-            TableName: this.table,
-            Item: {
-              ...record,
-              message: deleted,
-              revision: record.revision + 1,
-            },
-            ...this.versionCondition(record.revision),
+  private async roomPosts(room: string): Promise<Post[]> {
+    const posts: Post[] = [];
+    let cursor: Record<string, unknown> | undefined;
+    do {
+      const result = await client.send(
+        new QueryCommand({
+          TableName: this.postsTable,
+          KeyConditionExpression: "pk = :room",
+          ExpressionAttributeValues: { ":room": room },
+          ConsistentRead: true,
+          ExclusiveStartKey: cursor,
+        }),
+      );
+      for (const item of result.Items ?? []) {
+        const { pk, sk, ...post } = item;
+        posts.push(post as Post);
+      }
+      cursor = result.LastEvaluatedKey;
+    } while (cursor);
+    return posts;
+  }
+  private async blocked(room: string) {
+    const blocked = new Set<string>();
+    let cursor: Record<string, unknown> | undefined;
+    do {
+      const result = await client.send(
+        new QueryCommand({
+          TableName: this.controlTable,
+          KeyConditionExpression: "pk = :pk",
+          ExpressionAttributeValues: { ":pk": `MOD#${room}` },
+          ProjectionExpression: "sk",
+          ConsistentRead: true,
+          ExclusiveStartKey: cursor,
+        }),
+      );
+      for (const item of result.Items ?? []) blocked.add(item.sk);
+      cursor = result.LastEvaluatedKey;
+    } while (cursor);
+    return blocked;
+  }
+  async list(room: string, cursor?: string, limit = 50) {
+    const posts = await this.roomPosts(room);
+    const blocked = await this.blocked(room);
+    return pagePosts(posts, blocked, room, cursor, limit);
+  }
+  async get(originGeohash: string, postId: string) {
+    const copies = await Promise.all(
+      ancestors(originSchema.parse(originGeohash))
+        .reverse()
+        .map((room) =>
+          client.send(
+            new GetCommand({
+              TableName: this.postsTable,
+              Key: slotKey(room, postId),
+              ConsistentRead: true,
+            }),
+          ),
+        ),
+    );
+    const item = copies.find((result) => result.Item?.postId === postId)?.Item;
+    if (!item) return undefined;
+    const { pk, sk, ...post } = item;
+    return post as Post;
+  }
+  async remove(post: Post) {
+    const rooms = ancestors(originSchema.parse(post.originGeohash));
+    // Body-free moderation markers hide a delayed in-flight publication of this exact ID.
+    await this.batch(
+      this.controlTable,
+      rooms.map((room) => ({
+        PutRequest: {
+          Item: {
+            pk: `MOD#${room}`,
+            sk: post.postId,
+            originGeohash: post.originGeohash,
           },
         },
-      ];
-      for (const room of record.retainedRooms as string[])
-        writes.push({
-          Put: {
-            TableName: this.table,
-            Item: { ...digestKey(room, m), message: deleted },
-            ConditionExpression: "attribute_exists(pk)",
-          },
-        });
-      try {
-        await this.transaction(writes);
-        return;
-      } catch (error) {
-        if ((error as Error).name !== "TransactionCanceledException")
-          throw error;
-      }
-    }
-    throw new ApiError(409, "Message changed during deletion. Please retry.");
+      })),
+    );
+    await Promise.all(
+      rooms.map(async (room) => {
+        try {
+          await client.send(
+            new DeleteCommand({
+              TableName: this.postsTable,
+              Key: slotKey(room, post.postId),
+              ConditionExpression: "postId = :id",
+              ExpressionAttributeValues: { ":id": post.postId },
+            }),
+          );
+        } catch (error) {
+          if ((error as Error).name !== "ConditionalCheckFailedException")
+            throw error;
+        }
+      }),
+    );
   }
   async report(report: Report) {
-    try {
-      await this.transaction([
-        this.rate(`report#${report.reporterId}`, 5),
-        {
-          Put: {
-            TableName: this.table,
-            Item: {
-              pk: "REPORTS",
-              sk: `REPORT#${report.createdAt}#${report.id}`,
-              report,
-            },
-          },
+    await this.rate(`report:${report.reporterId}`, 5, Date.now());
+    await client.send(
+      new PutCommand({
+        TableName: this.controlTable,
+        Item: {
+          pk: "REPORTS",
+          sk: `REPORT#${report.createdAt}#${report.id}`,
+          report,
         },
-      ]);
-    } catch (e) {
-      if ((e as Error).name === "TransactionCanceledException")
-        throw new ApiError(429, "Too many reports. Try again in a minute.");
-      throw e;
-    }
+      }),
+    );
   }
   async reports(cursor?: string) {
     const out = await client.send(
       new QueryCommand({
-        TableName: this.table,
+        TableName: this.controlTable,
         KeyConditionExpression: "pk = :pk",
         ExpressionAttributeValues: { ":pk": "REPORTS" },
         ScanIndexForward: false,
         Limit: 50,
-        ExclusiveStartKey: cursorDecode(cursor, "REPORTS"),
+        ExclusiveStartKey: reportCursor(cursor),
       }),
     );
     return {
-      reports: (out.Items ?? []).map((i) => i.report as Report),
+      reports: (out.Items ?? []).map((item) => item.report as Report),
       cursor: out.LastEvaluatedKey
         ? cursorEncode(out.LastEvaluatedKey)
         : undefined,
     };
   }
-  async ban(id: string, banned: boolean) {
-    await client.send(
-      new PutCommand({
-        TableName: this.table,
-        Item: { pk: `USER#${id}`, sk: "META", banned },
+  async counts(rooms: string[], now = Date.now()) {
+    const counts = await Promise.all(
+      rooms.map(async (room) => {
+        const posts = await this.roomPosts(room);
+        const blocked = await this.blocked(room);
+        return [
+          room,
+          posts.filter(
+            (post) =>
+              Date.parse(post.createdAt) >= now - 15 * 60_000 &&
+              !blocked.has(post.postId),
+          ).length,
+        ] as const;
       }),
     );
-  }
-  async counts(rooms: string[]) {
-    const counts: Record<string, number> = Object.fromEntries(
-      rooms.map((p) => [p, 0]),
-    );
-    let pending = rooms.flatMap((p) =>
-      [0, 1, 2, 3].map((i) => ({
-        pk: `ACTIVITY#${p}`,
-        sk: `BUCKET#${bucket() - i}`,
-      })),
-    );
-    for (let attempt = 0; pending.length && attempt < 4; attempt++) {
-      const out = await client.send(
-        new BatchGetCommand({
-          RequestItems: {
-            [this.table]: { Keys: pending, ConsistentRead: true },
-          },
-        }),
-      );
-      for (const i of out.Responses?.[this.table] ?? [])
-        counts[i.pk.slice(9)] += i.count ?? 0;
-      pending = (out.UnprocessedKeys?.[this.table]?.Keys ??
-        []) as typeof pending;
-      if (pending.length)
-        await new Promise((r) => setTimeout(r, 50 * 2 ** attempt));
-    }
-    if (pending.length)
-      throw new ApiError(503, "Activity is temporarily unavailable.");
-    return counts;
+    return Object.fromEntries(counts);
   }
 }

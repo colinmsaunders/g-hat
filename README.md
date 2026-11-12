@@ -2,6 +2,8 @@
 
 Read anywhere. Post from where you are. A TypeScript monorepo for guest-first, geographically nested chat on AWS.
 
+Live at **https://geohash.chat**, with the application in **us-west-2**, AWS account **451261323611**. CloudFront is global and its certificate remains in us-east-1.
+
 ## Run locally
 
 Requires Node.js 22.12+ and npm.
@@ -25,10 +27,10 @@ npm run synth
 
 - React/Vite frontend with rooms at `/<geohash>`, child and parent navigation, optional browsing geolocation, required fresh posting location, activity-based smart zoom, and a responsive chat interface.
 - Public room reads, guest sessions, optional Cognito email accounts, slash commands, and HTTP polling every five seconds while visible. Guest display names are not unique.
-- Server-derived posting rooms with accuracy-based precision (1–8), freshness checks, and no persisted raw GPS coordinates.
-- Atomic fan-out and count eviction across all room ancestors, bounded to eight prefixes. Messages never flow downward. Evicting one room copy does not affect other room copies.
-- Independent newest-1,000 DynamoDB room feeds without time expiry, cursor pagination, request deduplication, guest and posting rate limits, message reporting, owner/moderator deletion, and moderator bans.
-- CDK stack: HTTP API, Node.js Lambda, retained DynamoDB table with point-in-time recovery, Cognito, private S3 assets, CloudFront, optional Route 53/ACM domain, logs, and error alarm.
+- Server-derived precision-8 posting origins, fresh location checks, persistent HttpOnly guest cookies, and short-lived coarse observations for motion checks.
+- Eight unconditional denormalized writes into independent rooms. Each room has 1,024 random Base32 slots; collisions replace posts without chronological eviction or post TTL.
+- Full-room query pagination, timestamp sorting, per-identity/IP limits, duplicate/content/motion admission checks, reporting and replacement-safe moderation deletion.
+- CDK: HTTP API, Lambda, separate post/control DynamoDB tables, Cognito, private S3, CloudFront, optional Route 53/ACM, logs, error alarms and storage metrics dashboard.
 - Same API application in local and Lambda adapters; behavior tests and infrastructure assertions.
 
 See [architecture and DynamoDB schema](docs/architecture.md), [API contracts](docs/api.md), and [deployment instructions](docs/deployment.md).
@@ -45,9 +47,11 @@ See [architecture and DynamoDB schema](docs/architecture.md), [API contracts](do
 
 ## Scope and next milestone
 
-This is an executable first milestone, not a claim of public-launch readiness. Public launch still needs traffic/load testing, alert routing, operational moderation coverage, and stronger guest abuse protection. Low-precision rooms share one partition and transactionally updated activity buckets; load-test those hot keys before promoting a busy service. Guest bans are identity-based and can be evaded by creating a new session; hashed-IP limits provide only a basic additional bound.
+This local schema-v3 revision has not been deployed. The recorded live deployment uses the earlier schema. Updating creates empty `PostsV3` and `ControlV3` tables and changes API contracts; old tables are retained. Deploy frontend and backend together. Existing region migration scripts apply only to historical schema v2.
 
-Other deliberate limits: polling instead of WebSockets; moderator actions exposed through authenticated APIs rather than a moderation UI; Cognito sign-up/confirmation/sign-in without a password-reset or token-refresh UI (sign in again after one hour); no account/guest history merging; no attachment uploads; no map tile service; no full-text search; no automated moderation. Schema v2 creates a new empty `DataV2` table on updates; existing v1 data is retained separately and requires an explicit migration. The coordinate illustration is decorative, not a geographic map. Messages are public; location is optional for browsing and required for posting. Raw coordinates are transiently sent for validation; only the derived geohash is persisted. Browser location can be spoofed.
+Remaining launch work: load/cost testing, alert routing, operational moderation, verified viewer-IP protection behind CloudFront, and broader content abuse handling. Browser GPS is spoofable; coarse motion checks can race. Full-room reads and durable moderation markers have growing read costs. Broad prefixes may become hot. These tradeoffs are documented in the architecture.
+
+Other limits: polling rather than WebSockets, API-only moderator tools, no password-reset/token-refresh UI, no account/guest merging, attachments, full-text search or map tiles. Public precision-8 origins reveal location; raw GPS history is not stored. Optional Cognito tokens remain in localStorage; guest identity uses a secure cookie.
 
 ## Commands
 

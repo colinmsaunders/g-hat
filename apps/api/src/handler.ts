@@ -8,7 +8,10 @@ const verifier = CognitoJwtVerifier.create({
   clientId: process.env.USER_POOL_CLIENT_ID!,
 });
 const app = createApp(
-  new DynamoStore(process.env.TABLE_NAME!),
+  new DynamoStore(
+    process.env.POSTS_TABLE_NAME!,
+    process.env.CONTROL_TABLE_NAME!,
+  ),
   async (token) => {
     const claims = await verifier.verify(token);
     return {
@@ -17,12 +20,15 @@ const app = createApp(
       moderator: (claims["cognito:groups"] ?? []).includes("moderators"),
     };
   },
+  { readOnly: process.env.READ_ONLY === "true" },
 );
 export const handler: APIGatewayProxyHandlerV2 = async (event) => {
   const result = await app({
     method: event.requestContext.http.method,
     path: event.rawPath,
     query: new URLSearchParams(event.rawQueryString),
+    cookie: event.cookies?.join("; "),
+    csrf: event.headers["x-geohash-request"],
     token: event.headers.authorization?.replace(/^Bearer /i, ""),
     body: event.isBase64Encoded
       ? Buffer.from(event.body ?? "", "base64").toString()
@@ -31,6 +37,7 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
   });
   return {
     statusCode: result.status,
+    cookies: result.cookies,
     headers: {
       "content-type": "application/json",
       "cache-control": "no-store",

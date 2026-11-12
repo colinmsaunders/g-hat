@@ -8,14 +8,20 @@ import {
   postingRoom,
   roomSchema,
   type Identity,
-  type Message,
+  type Post,
+  encodePostId,
+  postIdSchema,
+  originSchema,
 } from "@geohash-chat/shared";
 import { ApiError, type Store } from "./store";
+import { admitPost, type LocationRiskCheck } from "./admission";
 export interface Request {
   method: string;
   path: string;
   query: URLSearchParams;
   token?: string;
+  cookie?: string;
+  csrf?: string;
   body?: string;
   ip: string;
 }
@@ -24,11 +30,33 @@ export const hash = (value: string) =>
 export function createApp(
   store: Store,
   verifyUser?: (token: string) => Promise<Identity>,
+  options: {
+    readOnly?: boolean;
+    insecureLocalCookie?: boolean;
+    riskCheck?: LocationRiskCheck;
+  } = {},
 ) {
-  return async (req: Request): Promise<{ status: number; body: unknown }> => {
+  return async (
+    req: Request,
+  ): Promise<{ status: number; body: unknown; cookies?: string[] }> => {
     try {
+      if (options.readOnly && !["GET", "HEAD", "OPTIONS"].includes(req.method))
+        throw new ApiError(
+          503,
+          "Posting and account changes are temporarily paused for a region migration. Browsing remains available.",
+        );
       if ((req.body?.length ?? 0) > 16000)
         throw new ApiError(413, "Request too large.");
+      if (!["GET", "HEAD", "OPTIONS"].includes(req.method) && req.csrf !== "1")
+        throw new ApiError(403, "Missing same-origin request header.");
+      const cookieName = options.insecureLocalCookie
+        ? "geohash_guest"
+        : "__Host-geohash_guest";
+      const guestToken = req.cookie
+        ?.split(";")
+        .map((v) => v.trim())
+        .find((v) => v.startsWith(cookieName + "="))
+        ?.slice(cookieName.length + 1);
       const parse = () => {
         try {
           return JSON.parse(req.body ?? "{}");
@@ -40,10 +68,10 @@ export function createApp(
       const ip = hash(req.ip); // Never persist raw source IPs.
       const authenticate = async () => {
         const token = req.token;
-        if (!token)
-          throw new ApiError(401, "Sign in or start a guest session.");
-        if (token.startsWith("guest_")) {
-          const session = await store.session(hash(token));
+        if (!token) {
+          const session = guestToken
+            ? await store.session(hash(guestToken))
+            : undefined;
           if (!session || session.expiresAt <= Date.now() / 1000)
             throw new ApiError(401, "Guest session expired.");
           return session.identity;
@@ -69,7 +97,12 @@ export function createApp(
         const { name } = z
           .object({ name: nameSchema.default("Wanderer") })
           .parse(parse());
-        const token = `guest_${randomBytes(32).toString("base64url")}`;
+        const existing = guestToken
+          ? await store.session(hash(guestToken))
+          : undefined;
+        if (existing && existing.expiresAt > Date.now() / 1000)
+          return { status: 200, body: existing };
+        const token = randomBytes(32).toString("base64url");
         const identity = {
           id: `guest:${randomUUID()}`,
           name,
@@ -77,19 +110,25 @@ export function createApp(
         };
         const expiresAt = Math.floor(Date.now() / 1000) + 30 * 86400;
         await store.guest(hash(token), { identity, expiresAt }, ip);
-        return { status: 201, body: { token, identity, expiresAt } };
+        return {
+          status: 201,
+          body: { identity, expiresAt },
+          cookies: [
+            `${cookieName}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000${options.insecureLocalCookie ? "" : "; Secure"}`,
+          ],
+        };
       }
       if (req.method === "GET" && path === "/me")
         return { status: 200, body: await authenticate() };
       if (req.method === "PATCH" && path === "/me") {
         const user = await authenticate();
-        if (!req.token?.startsWith("guest_"))
+        if (req.token || !guestToken)
           throw new ApiError(
             400,
             "Registered names are managed in your account.",
           );
         const { name } = z.object({ name: nameSchema }).parse(parse());
-        await store.rename(hash(req.token), name);
+        await store.rename(hash(guestToken), name);
         return { status: 200, body: { ...user, name } };
       }
       if (req.method === "GET" && path === "/rooms/suggest") {
@@ -100,7 +139,7 @@ export function createApp(
           body: {
             room: chooseRoom(geohash, counts),
             counts,
-            windowMinutes: "15–20",
+            windowMinutes: 15,
             targetMessages: 3,
           },
         };
@@ -116,7 +155,7 @@ export function createApp(
       }
       if (req.method === "POST" && path === "/messages") {
         const user = await authenticate();
-        const { text, requestId, location } = postSchema.parse(parse());
+        const { content, location } = postSchema.parse(parse());
         let room: string;
         try {
           room = postingRoom(location);
@@ -124,21 +163,34 @@ export function createApp(
           if (error instanceof z.ZodError) throw error;
           throw new ApiError(400, (error as Error).message);
         }
-        const message: Message = {
-          id: randomUUID(),
-          room,
+        await admitPost(
+          store,
+          user.id,
+          req.ip,
+          location,
+          content,
+          Date.now(),
+          options.riskCheck,
+        );
+        const message: Post = {
+          postId: encodePostId(randomBytes(20)),
+          originGeohash: room,
           authorId: user.id,
-          name: user.name,
-          text,
+          displayName: user.name,
+          content,
           createdAt: new Date().toISOString(),
         };
-        return { status: 201, body: await store.post(message, requestId, ip) };
+        await store.post(message);
+        return { status: 201, body: message };
       }
       const messageMatch = path.match(/^\/messages\/([^/]+)(\/reports)?$/);
       if (messageMatch) {
         const user = await authenticate();
-        const id = z.uuid().parse(messageMatch[1]);
-        const message = await store.get(id);
+        const id = postIdSchema.parse(messageMatch[1]);
+        const origin = originSchema.parse(
+          req.query.get("originGeohash") ?? parse()?.originGeohash,
+        );
+        const message = await store.get(origin, id);
         if (!message) throw new ApiError(404, "Message not found.");
         if (req.method === "DELETE" && !messageMatch[2]) {
           if (message.authorId !== user.id && !user.moderator)
@@ -152,8 +204,9 @@ export function createApp(
             .parse(parse());
           await store.report({
             id: randomUUID(),
-            messageId: id,
-            room: message.room,
+            postId: id,
+            originGeohash: message.originGeohash,
+            authorId: message.authorId,
             reason,
             reporterId: user.id,
             createdAt: new Date().toISOString(),
