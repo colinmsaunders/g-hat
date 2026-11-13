@@ -1,6 +1,8 @@
+> Historical record of the predecessor deployment. Resource names and schema versions below are intentionally unchanged. For geochalk, use [the current deployment guide](../deployment.md).
+
 # Move geohash.chat to us-west-2
 
-> Schema v3 local update: see [architecture](architecture.md). The random-slot revision is now deployed. Existing DataV2 migration/copy steps below describe historical schema v2 and are not a v3 data conversion. The coordinated deployment created PostsV3/ControlV3, retained the old physical tables, and refreshed the recorded backend table output.
+> Schema v3 local update: see [architecture](../architecture.md). The random-slot revision is now deployed. Existing DataV2 migration/copy steps below describe historical schema v2 and are not a v3 data conversion. The coordinated deployment created PostsV3/ControlV3, retained the old physical tables, and refreshed the recorded backend table output.
 
 ## Completed cutover — 2026-11-10
 
@@ -37,7 +39,7 @@ Record the returned API ID, table, bucket, pool, client and Lambda function name
 3. Run the copy script with the destination identifiers from stack outputs:
 
 ```sh
-python3 scripts/migrate-region.py \
+python3 scripts/migrate-legacy-region.py \
   --destination-table WEST_TABLE \
   --destination-function WEST_FUNCTION \
   --destination-pool WEST_POOL

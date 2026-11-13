@@ -27,7 +27,7 @@ createServer(async (req, res) => {
     query: url.searchParams,
     body,
     cookie: req.headers.cookie,
-    csrf: req.headers["x-geohash-request"] as string | undefined,
+    csrf: req.headers["x-geochalk-request"] as string | undefined,
     token: req.headers.authorization?.replace(/^Bearer /i, ""),
     ip: req.socket.remoteAddress ?? "local",
   });

@@ -13,7 +13,7 @@ async function setup() {
     body?: unknown,
     csrf = "1",
   ) => {
-    const url = new URL(path, "https://geohash.chat");
+    const url = new URL(path, "https://geochalk.com");
     return app({
       method,
       path: url.pathname,
@@ -31,7 +31,7 @@ async function setup() {
 it("creates secure persistent cookie identity without exposing a bearer secret", async () => {
   const { request, session } = await setup();
   expect(session.cookies![0]).toMatch(
-    /__Host-geohash_guest=.*HttpOnly; SameSite=Lax.*Secure/,
+    /__Host-geochalk_guest=.*HttpOnly; SameSite=Lax.*Secure/,
   );
   expect(session.body).not.toHaveProperty("token");
   expect((await request("GET", "/me")).status).toBe(200);

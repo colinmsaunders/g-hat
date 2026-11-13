@@ -1,18 +1,19 @@
 {
   "app": "npx tsx infra/app.ts",
   "context": {
-    "domain": "geohash.chat",
-    "hostedZoneId": "Z08536772NCQUP6FKL46V",
+    "domain": "geochalk.com",
+    "hostedZoneId": "Z03155483MXGI0J176IXN",
     "enableWest": true,
     "westReadOnly": false,
     "eastReadOnly": true,
+    "edgeDistributionId": "E2KGR9JAO1J2EU",
     "backendTarget": {
       "region": "us-west-2",
-      "apiId": "ymhbg71uhi",
-      "bucketName": "geohashchatwest-webassets27872646-6guc1kzkq0jh",
-      "tableName": "GeohashChatWest-PostsV3CA088AC3-13H4HESM7PYE2",
-      "userPoolId": "us-west-2_PKHMWnh4F",
-      "userPoolClientId": "1215ki1iqhuo85lr7a1eems4v9"
+      "apiId": "ptnlpufnn1",
+      "bucketName": "geochalkwest-webassets27872646-rbdhhh5tsgxl",
+      "tableName": "GeochalkWest-PostsV1DF14853D-7XHIOY6LGR94",
+      "userPoolId": "us-west-2_GjbVKnolf",
+      "userPoolClientId": "2vft072gcdacmjn4lh6ju5co47"
     }
   }
 }

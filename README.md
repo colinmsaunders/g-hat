@@ -1,8 +1,8 @@
-# geohash.chat
+# geochalk
 
 Read anywhere. Post from where you are. A TypeScript monorepo for guest-first, geographically nested chat on AWS.
 
-Live at **https://geohash.chat**, with the application in **us-west-2**, AWS account **451261323611**. CloudFront is global and its certificate remains in us-east-1.
+Live at **https://geochalk.com**, with the application in **us-west-2**, AWS account **451261323611**. CloudFront is global and its certificate remains in us-east-1.
 
 ## Run locally
 
@@ -33,7 +33,7 @@ npm run synth
 - CDK: HTTP API, Lambda, separate post/control DynamoDB tables, Cognito, private S3, CloudFront, optional Route 53/ACM, logs, error alarms and storage metrics dashboard.
 - Same API application in local and Lambda adapters; behavior tests and infrastructure assertions.
 
-See [architecture and DynamoDB schema](docs/architecture.md), [API contracts](docs/api.md), and [deployment instructions](docs/deployment.md).
+See [architecture and DynamoDB schema](docs/architecture.md), [API contracts](docs/api.md), and [deployment instructions](docs/deployment.md), and [traffic cost estimates](docs/costs.md).
 
 ## Layout
 
@@ -47,7 +47,7 @@ See [architecture and DynamoDB schema](docs/architecture.md), [API contracts](do
 
 ## Scope and next milestone
 
-Schema v3 is deployed in account 451261323611, with the active backend in us-west-2. The coordinated update created `PostsV3` and `ControlV3`; old tables were retained without copying data. Existing region migration scripts apply only to historical schema v2.
+Geochalk architecture/schema v1 is deployed with fresh data in account 451261323611, with the application in us-west-2. New `PostsV1` and `ControlV1` tables use the existing random-slot model. Prior deployments are retained without copying posts or accounts; see the deployment guide for rollout status.
 
 Remaining launch work: load/cost testing, alert routing, operational moderation, verified viewer-IP protection behind CloudFront, and broader content abuse handling. Browser GPS is spoofable; coarse motion checks can race. Full-room reads and durable moderation markers have growing read costs. Broad prefixes may become hot. These tradeoffs are documented in the architecture.
 

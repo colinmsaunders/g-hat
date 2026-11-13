@@ -6,7 +6,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-spec = importlib.util.spec_from_file_location('migration', Path(__file__).parents[1] / 'scripts/migrate-region.py')
+spec = importlib.util.spec_from_file_location('migration', Path(__file__).parents[1] / 'scripts/migrate-legacy-region.py')
 migration = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(migration)
 
@@ -52,7 +52,7 @@ class MigrationTests(unittest.TestCase):
 
     def run_copy(self):
         output = io.StringIO()
-        with patch.object(migration, 'aws', side_effect=self.aws), patch.object(migration.time, 'sleep'), patch('sys.argv', ['migrate-region.py', '--destination-table', 'west-table', '--destination-function', 'west-function', '--destination-pool', 'west-pool']), contextlib.redirect_stdout(output):
+        with patch.object(migration, 'aws', side_effect=self.aws), patch.object(migration.time, 'sleep'), patch('sys.argv', ['migrate-legacy-region.py', '--destination-table', 'west-table', '--destination-function', 'west-function', '--destination-pool', 'west-pool']), contextlib.redirect_stdout(output):
             migration.main()
         return output.getvalue()
 

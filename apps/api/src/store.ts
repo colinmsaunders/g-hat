@@ -5,7 +5,7 @@ import {
   type Identity,
   type Post,
   type Page,
-} from "@geohash-chat/shared";
+} from "@geochalk/shared";
 export class ApiError extends Error {
   constructor(
     public status: number,

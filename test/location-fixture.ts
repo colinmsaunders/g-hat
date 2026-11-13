@@ -1,4 +1,4 @@
-import { bounds } from "@geohash-chat/shared";
+import { bounds } from "@geochalk/shared";
 export function locationFor(room: string) {
   const b = bounds(room);
   const latitude = (b.north + b.south) / 2,

@@ -1,5 +1,5 @@
 {
-  "name": "geohash-chat",
+  "name": "geochalk",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -13,7 +13,7 @@
     "typecheck": "tsc --noEmit",
     "test": "npm run build && vitest run",
     "synth": "cdk synth",
-    "deploy": "npm run build && cdk deploy --outputs-file cdk-outputs.json",
+    "deploy": "npm run build && cdk deploy GeochalkWest --outputs-file geochalk-west-outputs.json && cdk deploy Geochalk --outputs-file geochalk-edge-outputs.json",
     "format": "prettier --write apps packages infra test docs README.md package.json tsconfig.json cdk.json vitest.config.ts"
   },
   "dependencies": {

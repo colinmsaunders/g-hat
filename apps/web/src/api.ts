@@ -1,4 +1,4 @@
-import type { Identity } from "@geohash-chat/shared";
+import type { Identity } from "@geochalk/shared";
 export interface Config {
   apiUrl: string;
   local: boolean;
@@ -12,7 +12,7 @@ export const config: Config = await fetch("/config.json", {
   if (!r.ok) throw Error("Unable to load site configuration.");
   return r.json();
 });
-export const sessionKey = "geohash.chat.session";
+export const sessionKey = "geochalk.session";
 export function token() {
   const value = localStorage.getItem(sessionKey) ?? "";
   return value.startsWith("guest_") ? "" : value;
@@ -29,7 +29,7 @@ export async function api<T>(
     credentials: "same-origin",
     headers: {
       "content-type": "application/json",
-      "x-geohash-request": "1",
+      "x-geochalk-request": "1",
       ...(token() ? { authorization: `Bearer ${token()}` } : {}),
       ...options.headers,
     },
@@ -53,7 +53,7 @@ export async function ensureGuest(): Promise<Identity> {
     const session = await api<{ identity: Identity }>("/sessions", {
       method: "POST",
       body: JSON.stringify({
-        name: localStorage.getItem("geohash.chat.name") ?? "Wanderer",
+        name: localStorage.getItem("geochalk.name") ?? "Wanderer",
       }),
     });
     return session.identity;

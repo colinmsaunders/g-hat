@@ -5,7 +5,7 @@ import {
   postSlot,
   ancestors,
   type Post,
-} from "@geohash-chat/shared";
+} from "@geochalk/shared";
 import { MemoryStore } from "../apps/api/src/memory";
 export const makePost = (overrides: Partial<Post> = {}): Post => ({
   postId: "A".repeat(32),

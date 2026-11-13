@@ -6,7 +6,7 @@ import {
   chooseRoom,
   command,
   roomSchema,
-} from "@geohash-chat/shared";
+} from "@geochalk/shared";
 describe("geohash geometry", () => {
   it("matches a standard geohash vector", () => {
     expect(encode(42.6, -5.6, 5)).toBe("ezs42");

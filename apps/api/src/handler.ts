@@ -28,7 +28,7 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
     path: event.rawPath,
     query: new URLSearchParams(event.rawQueryString),
     cookie: event.cookies?.join("; "),
-    csrf: event.headers["x-geohash-request"],
+    csrf: event.headers["x-geochalk-request"],
     token: event.headers.authorization?.replace(/^Bearer /i, ""),
     body: event.isBase64Encoded
       ? Buffer.from(event.body ?? "", "base64").toString()

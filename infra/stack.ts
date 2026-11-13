@@ -34,7 +34,7 @@ export interface ChatStackProps extends cdk.StackProps {
 export class ChatStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: ChatStackProps) {
     super(scope, id, props);
-    const table = new dynamodb.Table(this, "PostsV3", {
+    const table = new dynamodb.Table(this, "PostsV1", {
       partitionKey: { name: "pk", type: dynamodb.AttributeType.STRING },
       sortKey: { name: "sk", type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
@@ -42,7 +42,7 @@ export class ChatStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
       encryption: dynamodb.TableEncryption.AWS_MANAGED,
     });
-    const controls = new dynamodb.Table(this, "ControlV3", {
+    const controls = new dynamodb.Table(this, "ControlV1", {
       partitionKey: { name: "pk", type: dynamodb.AttributeType.STRING },
       sortKey: { name: "sk", type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
@@ -143,6 +143,7 @@ export class ChatStack extends cdk.Stack {
     table.grantReadWriteData(fn);
     controls.grantReadWriteData(fn);
     const api = new apigw.HttpApi(this, "HttpApi", {
+      apiName: `${this.stackName}-api`,
       createDefaultStage: false,
     });
     api.addRoutes({
@@ -248,6 +249,7 @@ export class ChatStack extends cdk.Stack {
       ),
     });
     const distribution = new cloudfront.Distribution(this, "Web", {
+      comment: "geochalk.com — architecture v1",
       defaultRootObject: "index.html",
       domainNames: domain ? [domain] : undefined,
       certificate,
@@ -276,6 +278,9 @@ export class ChatStack extends cdk.Stack {
             cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
         },
       },
+    });
+    new cdk.CfnOutput(this, "DistributionId", {
+      value: distribution.distributionId,
     });
     if (zone && domain) {
       new route53.ARecord(this, "Alias", {

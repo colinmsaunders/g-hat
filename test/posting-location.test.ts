@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { randomUUID } from "node:crypto";
-import { postingRoom } from "@geohash-chat/shared";
+import { postingRoom } from "@geochalk/shared";
 import { locationFor } from "./location-fixture";
 import { createApp } from "../apps/api/src/app";
 import { MemoryStore } from "../apps/api/src/memory";

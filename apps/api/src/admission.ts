@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { bounds, encode, type PostingLocation } from "@geohash-chat/shared";
+import { bounds, encode, type PostingLocation } from "@geochalk/shared";
 import {
   ApiError,
   OBSERVATION_TTL_SECONDS,

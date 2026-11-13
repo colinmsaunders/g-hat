@@ -1,98 +1,88 @@
-# Deploy to AWS
+# Deploy geochalk v1 to AWS
 
-> Schema v3 is deployed. See [architecture](architecture.md) for the random-slot storage model. The old physical DataV2 tables remain retained; no old data was copied.
+Geochalk uses **https://geochalk.com**, AWS account **451261323611**, an application backend in **us-west-2**, and a global CloudFront distribution with its ACM certificate in **us-east-1**. Architecture/schema numbering starts at **v1**, with the random-slot storage model described in [architecture.md](architecture.md).
 
-Deployment creates billable AWS resources. Use an existing AWS account with an authenticated CLI profile and CDK bootstrap permissions. The repository does not contain credentials. See the verification checklist below for checks beyond infrastructure deployment.
+## Fresh deployment and retained history
 
-## Active deployment
+The rename creates `Geochalk` (eastern edge stack) and `GeochalkWest` (western application stack), with new `PostsV1` and `ControlV1` tables, Cognito pools, APIs, Lambda functions, buckets, IAM roles, logs, dashboards and alarms. The eastern stack retains the existing two-region topology with an unused, read-only regional backend. Only the western backend serves the final site.
 
-The application now runs in **AWS account 451261323611, us-west-2**, at **https://geohash.chat**. `GeohashChatWest` owns the active API, Lambda, DynamoDB table, Cognito pool and S3 assets. The `GeohashChat` stack in us-east-1 owns the existing global CloudFront distribution, Route 53 records and required us-east-1 ACM certificate. Its old regional backend remains read-only; it was not deleted.
+The user authorized fresh data and retention of the predecessor resources. No posts, accounts, sessions, reports or bans are copied. New domain-local storage uses `geochalk.session` and `geochalk.name`; guest cookies use `__Host-geochalk_guest` (`geochalk_guest` locally), and mutation requests require `x-geochalk-request: 1`. Users register again on the new site.
 
-The user authorized a fresh-data cutover. Eastern records and accounts were not copied. See [region-migration.md](region-migration.md) for the completed cutover and the unused data-preserving procedure.
+The predecessor stacks, domain, physical resource names and data remain unchanged. Their identifiers are documented accurately in [deployment history](history/legacy-deployment.md) and [region migration history](history/legacy-region-migration.md). `scripts/migrate-legacy-region.py` is historical schema-v2 tooling, not a geochalk v1 migration. Do not deploy old stack names from the current CDK app. Decommissioning retained resources is a separate operation.
 
-`infra/app.ts` pins account 451261323611 and rejects a different `CDK_DEFAULT_ACCOUNT`. `cdk.json` persists the western origin identifiers, `eastReadOnly: true`, `westReadOnly: false`, domain and hosted zone `Z08536772NCQUP6FKL46V`. Do not remove these settings or unfreeze the stale eastern backend during ordinary updates.
+## Deployment sequence
 
-Before deploying, verify the active CLI identity, then deploy the two stacks explicitly in order:
+`infra/app.ts` pins account 451261323611 and rejects another `CDK_DEFAULT_ACCOUNT`. `cdk.json` uses the geochalk.com hosted zone `Z03155483MXGI0J176IXN`. Verify identity before deployment:
 
 ```sh
 aws sts get-caller-identity # Account must be 451261323611
 npm ci
 npm test
-npx cdk diff GeohashChatWest GeohashChat --no-change-set
-npx cdk deploy GeohashChatWest --outputs-file cdk-west-outputs.json
-npx cdk deploy GeohashChat --outputs-file cdk-outputs.json
 ```
 
-Both regions are bootstrapped. Each stack pins its own region; changing `AWS_REGION` does not move it. The western stack publishes active assets, and the edge stack's asset deployment triggers CloudFront invalidation when assets/config change. CloudFront remains global; the certificate stays in us-east-1 as AWS requires. The stack does not configure `www` or modify registrar delegation.
+For initial provisioning, deploy `Geochalk` with `enableWest: false` and no `backendTarget`. This creates the new distribution, certificate and DNS with a read-only bootstrap backend:
 
-S3 remains private with CloudFront Origin Access Control. The western bucket policy grants read access only to the existing distribution. The edge stack imports this bucket, so CDK reports that it cannot update the imported policy; that policy is deliberately managed by the western stack. `/api/*` is uncached and forwards Authorization, cookies and the custom request header. Only `/` and valid geohash paths rewrite to the SPA.
+```sh
+npx cdk diff Geochalk --no-change-set
+npx cdk deploy Geochalk --outputs-file geochalk-edge-outputs.json
+```
 
-## Global room deployment — 2026-11-13
+Set `edgeDistributionId` in cdk.json from the `Geochalk.DistributionId` output and set `enableWest: true`. Deploy the western stack:
 
-Commit `5c2e0fa` adds precision zero as `_`, nine-room posting and moderation, and the `/_` frontend route. AWS caller identity was verified as account **451261323611**. Both `GeohashChatWest` (us-west-2) and `GeohashChat` (us-east-1 edge stack) reached `UPDATE_COMPLETE`. No table changes or backfill were performed.
+```sh
+npx cdk diff GeochalkWest --no-change-set
+npx cdk deploy GeochalkWest --outputs-file geochalk-west-outputs.json
+```
 
-The production build and all 33 tests passed. Read-only live checks passed for `/_`, `/_/`, matching deployed frontend assets, `/api/rooms/_/messages`, global room suggestion, western configuration and API health. No test posts were published.
+Set `backendTarget` from the actual western outputs: `region: us-west-2`, `apiId: ApiId`, `bucketName: BucketName`, `tableName: TableName`, `userPoolId: UserPoolId`, and `userPoolClientId: UserPoolClientId`. Then deploy `Geochalk` again to switch origins and invalidate CloudFront. Never manufacture physical identifiers by replacing text in old outputs.
 
-## Schema v3 deployment — 2026-11-11
+For subsequent coordinated updates:
 
-Caller identity confirmed account **451261323611**. The western stack and edge stack were updated; the active CloudFront API and asset origins remain in us-west-2. The eastern backend remains read-only and does not serve site traffic. Both stacks provisioned their v3 tables; old DataV2 physical tables were retained without migration.
+```sh
+npx cdk diff GeochalkWest Geochalk --no-change-set
+npm run deploy
+```
 
-Active western tables:
+If western resource outputs change, refresh `backendTarget` before deploying the edge stack. Keep `eastReadOnly: true` and `westReadOnly: false`. Both regions are bootstrapped. Output files are ignored and named `geochalk-edge-outputs.json` and `geochalk-west-outputs.json`; prior local snapshots use the `legacy-` prefix.
 
-- Posts: `GeohashChatWest-PostsV3CA088AC3-13H4HESM7PYE2` — TTL disabled.
-- Controls: `GeohashChatWest-ControlV33CDFAE28-1O1MIUR5C1FH9` — TTL enabled on `expiresAt`.
+S3 is private with Origin Access Control restricted to the new distribution. The west stack manages its bucket policy; the edge stack imports that bucket. `/api/*` is uncached and forwards Authorization, cookies and the request header. Only `/` and valid geographic room paths rewrite to the SPA. The stack does not configure `www` or alter registrar delegation.
 
-Build and 30 TypeScript tests passed before deployment. Live checks passed for HTTPS, deep links, assets, western config, health, room reads, smart zoom, secure HttpOnly guest cookie, authenticated `/me`, invalid-location rejection and request-header protection. No posts were published by smoke checks. Real browser geolocation, successful end-to-end publication/moderation and load tests remain acceptance work.
+## Verification
 
-## Western cutover verification — 2026-11-10
+Check HTTPS, `/config.json`, built assets, `/_`, a geographic deep link, `/api/health`, room reads and smart zoom. Confirm the production config and CloudFront origins use the new western resources. Check secure guest cookies, authenticated `/me`, missing-auth and invalid-location rejection, and request-header protection without publishing test posts.
 
-Both stacks completed their updates. CloudFront reports `Deployed` and uses western API and S3 origins. Live checks passed for HTTPS, deep room links, built assets, western production config, API health, room reads, smart zoom, guest creation, authenticated `/me`, missing-auth rejection, missing-location rejection and removal of the old posting endpoint. No chat messages were posted by these checks. Actual browser geolocation and account email delivery remain acceptance checks.
+Browser geolocation, successful posting/deletion/reporting, account email delivery and load testing remain manual acceptance checks. Check permission denial, stale/future fixes, low accuracy, geographic jumps, random collisions, delayed writes, partial fanout and conditional deletion. Do not log request bodies or raw coordinates.
 
-The build and all 30 TypeScript tests plus four migration-safety tests passed during preparation. No source data copy was attempted after the user waived retention.
+## Moderators and operations
 
-## Initial eastern deployment verification — 2026-11-10
-
-CloudFormation reached `CREATE_COMPLETE` for `GeohashChat` in account `451261323611`, us-east-1. HTTPS checks passed for the homepage, a room deep link, built JavaScript and production config. Live API health, room reads, smart zoom, guest session creation and authenticated `/me` passed. Posting without authentication returned 401, posting without location returned 400, and the removed room-addressed posting endpoint returned 404. No chat messages were published by these checks.
-
-All 27 automated tests and the production build passed before deployment. The infrastructure test now executes the generated CloudFront routing function to catch escaping errors. Actual browser geolocation, account email delivery, end-to-end valid posting and moderation remain manual/live acceptance checks; the smoke check does not claim to cover them.
-
-The AWS login renewed during deployment changed the CLI **default profile** from its previous account to `451261323611`. Recheck caller identity before using the default profile for other projects.
-
-## Verify after deployment
-
-1. Open `SiteUrl/9q8yy`, grant location and post as a guest. Confirm that the returned posting room is derived from the reported location, even while viewing a distant room. Confirm the post appears in its ancestor feeds but not unrelated or descendant feeds.
-2. Refresh, confirm guest identity survives, and test account creation/email confirmation/sign-in. Cognito email quotas and deliverability depend on account configuration; configure SES for production volume.
-3. Delete a post and verify it disappears from parent rooms without deleting a replacement in the same slot. Report a message and review it with a moderator account.
-4. Test `/` location permission, denial fallback, smart zoom, narrow layouts and keyboard controls.
-5. Verify CloudWatch logs/error alarm, DynamoDB point-in-time recovery and access controls. The included alarm has no notification destination; attach an SNS action before launch.
-
-## Moderators
-
-Create and verify an ordinary account, then assign its Cognito username to the group:
+Assign a verified Cognito account to the `moderators` group:
 
 ```sh
 aws cognito-idp admin-add-user-to-group \
-  --user-pool-id YOUR_USER_POOL_ID \
+  --user-pool-id YOUR_GEOCHALK_USER_POOL_ID \
   --username YOUR_COGNITO_USERNAME \
   --group-name moderators
 ```
 
-Sign out and back in to receive a new ID token containing the group. Use that ID token against the moderation API described in [api.md](api.md). Do not place tokens in committed files or log them. Moderators can fetch report pages, delete offending messages and set identity bans. The first milestone does not provide an operator console, report resolution state or audit event stream.
+Sign in again for an updated token. See [API contracts](api.md). There is no operator console or audit event stream yet.
 
-## Operations, retention and cost
+Posts have no TTL; collisions overwrite slots. Controls expire sessions, counters and coarse observations via TTL; reports, bans and moderation markers have no expiry. Tables, pools and buckets are retained on stack removal. Old resources remain billable and may contain old content.
 
-Rooms hold at most 1,024 random slots without post TTL. Collisions overwrite full copies independently; there are no canonical bodies or chronological eviction. Control-table TTL expires sessions, counters and coarse observations. Reports, bans and moderation markers have no TTL. Post PITR and retained legacy tables can contain older content. DynamoDB, Cognito and asset buckets retain resources on stack removal.
+Configure alarm notification routing and budgets, then measure full-room reads, broad-prefix traffic and moderation storage growth. API throttling is 100 requests/second with a 200 burst, not a cost ceiling. Viewer-IP verification behind CloudFront remains future work. Keep dependency upgrades separate from this rename; recheck the lockfile audit before launch.
 
-At five-second polling, one visible tab makes up to 720 requests/hour; each room read retrieves all available slots before sorting and selecting 50. Smart zoom reads up to nine rooms. Broad prefixes and moderation partitions may become hot or expensive. Monitor the storage dashboard (capacity, throttles, latency), configure budgets and alarm notifications, and run load tests. API Gateway throttles at 100 requests/second with a 200 burst; this is not a guaranteed cost ceiling. Source-IP limiting behind CloudFront is a shared backstop, not viewer-IP WAF enforcement.
+## Rollout status
 
-## Dependency audit
+Deployed and verified on 2026-11-13. `GeochalkWest` reached `CREATE_COMPLETE`; `Geochalk` reached `UPDATE_COMPLETE`. CloudFront distribution `E2KGR9JAO1J2EU` reports `Deployed` with the new western S3 and API origins and alias `geochalk.com`.
 
-The lockfile pins the installed dependencies. The test runner was updated to remove reported critical advisories. AWS CDK 2.275.0 currently bundles `minimatch` 10.2.6, which npm reports with a moderate denial-of-service advisory (GHSA-g3hv-75wg-m249). This is build/deployment tooling, not included in the browser or API runtime bundle. Do not run `npm audit fix` blindly: in verification it downgraded CDK to an older version with additional high-severity advisories. Recheck upstream CDK releases and the audit before deployment. The current version is explicitly pinned to prevent that automatic downgrade.
+Active western resources:
 
-## Upgrading to schema v3
+- API: `ptnlpufnn1`.
+- Lambda: `GeochalkWest-ApiHandler5E7490E8-BOhUE18GF4js`.
+- Assets: `geochalkwest-webassets27872646-rbdhhh5tsgxl`.
+- Posts: `GeochalkWest-PostsV1DF14853D-7XHIOY6LGR94`.
+- Controls: `GeochalkWest-ControlV1DD0E9618-JBRLPTHZH0W8`.
+- Cognito: `us-west-2_GjbVKnolf`, client `2vft072gcdacmjn4lh6ju5co47`, Essentials tier.
 
-This revision creates empty `PostsV3` and `ControlV3` tables. The old `DataV2` table is retained. No posts, sessions, reports or bans are automatically copied. Existing guest bearer identities will become new cookie identities. Review the diff and coordinate backend/frontend rollout; downtime is allowed for the planned fresh-data update. The commands above describe the coordinated deployment sequence.
+The production build, 33 TypeScript tests and four legacy migration-safety tests passed. Updated infrastructure assertions verify the new certificate, hosted zone and CloudFront alias. Live checks passed for HTTPS branding, built assets, geographic/global deep links, western config, API health, room reads, smart zoom, missing-auth rejection, request-header protection, secure renamed guest cookie, authenticated `/me` and missing-location rejection. One guest session was created; no test messages were published. Browser geolocation, email delivery and load testing remain outside these checks.
 
-After deploying the western stack, update `cdk.json`'s `backendTarget.tableName` from its new `TableName` output before deploying the edge stack. Record `ControlTableName` separately for operations. Preserve the existing API, bucket, pool, account and region identifiers unless the actual outputs change. Historical v2 migration scripts must not copy old records into v3 tables.
-
-Before launch, exercise permission denial, stale/future fixes, low accuracy, geographic jumps, guest-cookie persistence, browsing elsewhere while posting, random collisions, delayed writes, partial fanout and conditional moderation deletion. Do not enable request-body logging containing coordinates. This task's tests mock AWS calls; real DynamoDB contention, browser/device location, account email delivery and load/cost tests remain deployment acceptance work.
+See [cost estimates](costs.md) for traffic assumptions, growth thresholds and retained-resource costs.

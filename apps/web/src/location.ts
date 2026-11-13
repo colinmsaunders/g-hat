@@ -1,4 +1,4 @@
-import type { PostingLocation } from "@geohash-chat/shared";
+import type { PostingLocation } from "@geochalk/shared";
 export function freshPostingLocation(): Promise<PostingLocation> {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {

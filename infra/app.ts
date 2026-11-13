@@ -1,4 +1,4 @@
-import { App } from "aws-cdk-lib";
+import { App, Tags } from "aws-cdk-lib";
 import { ChatStack, type BackendTarget } from "./stack";
 const targetAccount = "451261323611";
 if (
@@ -10,6 +10,8 @@ if (
   );
 }
 const app = new App();
+Tags.of(app).add("Application", "geochalk");
+Tags.of(app).add("ArchitectureVersion", "v1");
 function flag(name: string, fallback = false): boolean {
   const value = app.node.tryGetContext(name);
   if (value === undefined) return fallback;
@@ -17,18 +19,18 @@ function flag(name: string, fallback = false): boolean {
   if (value === false || value === "false") return false;
   throw new Error(`Invalid boolean context: ${name}`);
 }
-// Keep the existing edge stack in us-east-1 to preserve its distribution and ACM certificate.
-new ChatStack(app, "GeohashChat", {
+// CloudFront certificates must be in us-east-1. The backend lives in us-west-2.
+new ChatStack(app, "Geochalk", {
   env: { account: targetAccount, region: "us-east-1" },
   readOnly: flag("eastReadOnly"),
   backendTarget: app.node.tryGetContext("backendTarget") as
     BackendTarget | undefined,
 });
 if (flag("enableWest")) {
-  new ChatStack(app, "GeohashChatWest", {
+  new ChatStack(app, "GeochalkWest", {
     env: { account: targetAccount, region: "us-west-2" },
     regionalOnly: true,
     readOnly: flag("westReadOnly", true),
-    edgeDistributionId: "E17G6J5BI86OTG",
+    edgeDistributionId: app.node.tryGetContext("edgeDistributionId"),
   });
 }

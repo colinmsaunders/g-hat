@@ -12,7 +12,7 @@ import {
   encodePostId,
   postIdSchema,
   originSchema,
-} from "@geohash-chat/shared";
+} from "@geochalk/shared";
 import { ApiError, type Store } from "./store";
 import { admitPost, type LocationRiskCheck } from "./admission";
 export interface Request {
@@ -50,8 +50,8 @@ export function createApp(
       if (!["GET", "HEAD", "OPTIONS"].includes(req.method) && req.csrf !== "1")
         throw new ApiError(403, "Missing same-origin request header.");
       const cookieName = options.insecureLocalCookie
-        ? "geohash_guest"
-        : "__Host-geohash_guest";
+        ? "geochalk_guest"
+        : "__Host-geochalk_guest";
       const guestToken = req.cookie
         ?.split(";")
         .map((v) => v.trim())

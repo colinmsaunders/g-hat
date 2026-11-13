@@ -1,8 +1,8 @@
-# Architecture — random room slots (schema v3)
+# Geochalk architecture v1 — random room slots
 
-Read anywhere. Post from your reported current location. The TypeScript monorepo, Lambda HTTP API, DynamoDB, React/Vite, Cognito and CDK remain in place. This revision replaces adaptive precision and newest-1,000 retention. It is deployed to account 451261323611, with the active application in us-west-2.
+Read anywhere. Post from your reported current location. Geochalk v1 uses a TypeScript monorepo, Lambda HTTP API, DynamoDB, React/Vite, Cognito and CDK. The application targets AWS account 451261323611, us-west-2, with CloudFront and its certificate managed in us-east-1.
 
-The global-room extension was deployed on 2026-11-13. It adds a ninth copy for new posts only; existing posts are not backfilled. The global room has the same independent 1,024-slot limit and may become the hottest partition.
+The rename restarts architecture/schema numbering at v1. It preserves the predecessor's random-slot model and nine geographic levels, including the global room. New stacks and tables start empty; old resources remain retained. This is a naming baseline, not a return to an older data format.
 
 ## Nine geographic levels
 
@@ -41,7 +41,7 @@ Every item contains all six fields plus `pk = roomPrefix`, `sk = slot`. The same
 
 ## Storage, retention and concurrent writes
 
-CDK creates `PostsV3` (on-demand, encrypted, retained, PITR, no TTL) and `ControlV3` (on-demand, encrypted, retained, TTL on `expiresAt`). Both use string `pk`/`sk`, with no secondary indexes or explicit sharding.
+CDK creates `PostsV1` (on-demand, encrypted, retained, PITR, no TTL) and `ControlV1` (on-demand, encrypted, retained, TTL on `expiresAt`). Both use string `pk`/`sk`, with no secondary indexes or explicit sharding.
 
 After admission, a single batch contains nine unconditional full-item puts. Unprocessed items retry up to seven batch attempts with exponential backoff and jitter; SDK transport retries also apply. Conditions, transactions and revision locks are absent from normal posting. Batch operations overwrite existing items and are not atomic as a group. See [AWS BatchWriteItem semantics](https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_BatchWriteItem.html).
 
@@ -59,7 +59,7 @@ Smart zoom counts currently surviving, unmoderated posts created in the last 15 
 
 ## Guest identity and admission
 
-Guests receive a 30-day `__Host-geohash_guest` cookie, `Secure; HttpOnly; SameSite=Lax; Path=/`, without a Domain attribute. Only its SHA-256 hash is stored server-side. Local loopback development uses an unprefixed cookie without Secure. Sessions enforce logical expiry even before TTL cleanup. Existing cookies are reused. Optional Cognito ID tokens remain supported and verified; only the moderators group grants moderator rights. Mutations require the custom `x-geohash-request: 1` header; there is no cross-origin CORS permission. This prevents cross-origin form submissions using ambient cookies. Cognito tokens remain in localStorage; guest secrets do not.
+Guests receive a 30-day `__Host-geochalk_guest` cookie, `Secure; HttpOnly; SameSite=Lax; Path=/`, without a Domain attribute. Only its SHA-256 hash is stored server-side. Local loopback development uses an unprefixed cookie without Secure. Sessions enforce logical expiry even before TTL cleanup. Existing cookies are reused. Optional Cognito ID tokens remain supported and verified; only the moderators group grants moderator rights. Mutations require the custom `x-geochalk-request: 1` header; there is no cross-origin CORS permission. This prevents cross-origin form submissions using ambient cookies. Cognito tokens remain in localStorage; guest secrets do not.
 
 Before any slot write:
 
@@ -75,6 +75,6 @@ These are lightweight heuristics, not proof of physical presence. Guest resets a
 
 API responses remain uncached; CloudFront read caching is an optional future optimization. A CloudWatch dashboard includes consumed capacity, throttling and Query/BatchWriteItem latency, alongside existing Lambda error alarms. No sharding or local secondary indexes are added. Broad prefixes may get hot; measure before changing partition design. Full-room reads and accumulating moderation markers need load/cost testing. Alert notification routing is still operational work.
 
-Schema v3 uses new empty tables. Removing the old `DataV2` CDK resource retains its physical table under its existing retention policy. Legacy data is neither converted nor silently mixed into slots. Existing guest bearer sessions are replaced by new cookie sessions. API contracts change together with the frontend; deploy as a coordinated update with downtime permitted. Existing region-copy scripts describe schema v2 only and must not be used as a v3 migration.
+Geochalk v1 creates fresh `PostsV1` and `ControlV1` tables under new `Geochalk` / `GeochalkWest` stacks. No posts, accounts, sessions, reports or bans are copied. The new domain and renamed cookies/localStorage keys require new guest sessions and account registration. Deploy the API and frontend together because the request header is now `x-geochalk-request`.
 
-The current recorded deployment targets AWS account **451261323611**, application region **us-west-2**, with the global edge/certificate stack in us-east-1. The deployment verified caller identity in that account, deployed the western backend, refreshed the recorded table output, and updated the edge assets/config. Verify identity again before future updates. Old retained data and backup disposal are separate explicit operations.
+The predecessor stacks and retained data stay intact. Historical schema-v2 copy tooling is explicitly named `scripts/migrate-legacy-region.py` and must not be used for geochalk v1. See the [deployment guide](deployment.md) for current outputs and verification. Old resource disposal is a separate operation.

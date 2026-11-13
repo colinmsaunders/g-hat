@@ -3,7 +3,7 @@ import {
   originSchema,
   postSlot,
   type Post,
-} from "@geohash-chat/shared";
+} from "@geochalk/shared";
 import {
   ApiError,
   OBSERVATION_TTL_SECONDS,

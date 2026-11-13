@@ -1,6 +1,6 @@
-# HTTP API — schema v3
+# HTTP API — schema v1
 
-All routes start with `/api`. JSON errors are `{error:string}`. Public room reads require no identity. Mutations require `x-geohash-request: 1` plus the guest cookie or optional `Authorization: Bearer <Cognito ID token>`. Guest bearer tokens are no longer accepted.
+All routes start with `/api`. JSON errors are `{error:string}`. Public room reads require no identity. Mutations require `x-geochalk-request: 1` plus the guest cookie or optional `Authorization: Bearer <Cognito ID token>`. Guest bearer tokens are no longer accepted.
 
 | Method | Path                                       | Input                         | Success                                                                             |
 | ------ | ------------------------------------------ | ----------------------------- | ----------------------------------------------------------------------------------- |

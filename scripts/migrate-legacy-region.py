@@ -1,6 +1,6 @@
-"""Copy schema-v2 records in memory, only between frozen stacks in the pinned account.
+"""Historical predecessor tool; not for geochalk v1. Copy schema-v2 records in memory, only between frozen stacks in the pinned account.
 
-Usage: python3 scripts/migrate-region.py --destination-table TABLE --destination-function FUNCTION --destination-pool POOL
+Usage: python3 scripts/migrate-legacy-region.py --destination-table TABLE --destination-function FUNCTION --destination-pool POOL
 No tokens or record contents are printed or written to disk. Safe to resume a partial copy.
 """
 import argparse

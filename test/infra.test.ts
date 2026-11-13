@@ -18,7 +18,7 @@ describe("AWS deployment guardrails", () => {
     });
     const tables = template.findResources("AWS::DynamoDB::Table");
     const posts = Object.entries(tables).find(([id]) =>
-      id.startsWith("PostsV3"),
+      id.startsWith("PostsV1"),
     )![1];
     expect(posts.Properties).not.toHaveProperty("TimeToLiveSpecification");
     expect(posts.Properties).not.toHaveProperty("LocalSecondaryIndexes");
@@ -88,7 +88,7 @@ describe("western region preparation", () => {
       env: { account: "451261323611", region: "us-west-2" },
       regionalOnly: true,
       readOnly: true,
-      edgeDistributionId: "E17G6J5BI86OTG",
+      edgeDistributionId: "TEST_GEOCHALK_DISTRIBUTION",
     });
     const template = Template.fromStack(stack);
     template.resourceCountIs("AWS::CloudFront::Distribution", 0);
@@ -113,7 +113,7 @@ describe("western region preparation", () => {
                     [
                       "arn:",
                       { Ref: "AWS::Partition" },
-                      ":cloudfront::451261323611:distribution/E17G6J5BI86OTG",
+                      ":cloudfront::451261323611:distribution/TEST_GEOCHALK_DISTRIBUTION",
                     ],
                   ],
                 },
@@ -127,8 +127,8 @@ describe("western region preparation", () => {
   it("switches origins without moving the certificate or dropping the legacy resources", () => {
     const app = new App({
       context: {
-        domain: "geohash.chat",
-        hostedZoneId: "Z08536772NCQUP6FKL46V",
+        domain: "geochalk.com",
+        hostedZoneId: "Z03155483MXGI0J176IXN",
       },
     });
     const stack = new ChatStack(app, "TestEdge", {
@@ -148,8 +148,24 @@ describe("western region preparation", () => {
     template.resourceCountIs("AWS::DynamoDB::Table", 2);
     template.resourceCountIs("AWS::Cognito::UserPool", 1);
     template.resourceCountIs("AWS::CertificateManager::Certificate", 1);
+    template.hasResourceProperties("AWS::CertificateManager::Certificate", {
+      DomainName: "geochalk.com",
+      DomainValidationOptions: [
+        {
+          DomainName: "geochalk.com",
+          HostedZoneId: "Z03155483MXGI0J176IXN",
+        },
+      ],
+    });
+    template.hasResourceProperties("AWS::Route53::RecordSet", {
+      Name: "geochalk.com.",
+      HostedZoneId: "Z03155483MXGI0J176IXN",
+      Type: "A",
+    });
+
     template.hasResourceProperties("AWS::CloudFront::Distribution", {
       DistributionConfig: Match.objectLike({
+        Aliases: ["geochalk.com"],
         Origins: Match.arrayWith([
           Match.objectLike({
             DomainName: {

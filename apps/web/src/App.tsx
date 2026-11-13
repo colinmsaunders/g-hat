@@ -9,7 +9,7 @@ import {
   type Identity,
   type Post,
   type Page,
-} from "@geohash-chat/shared";
+} from "@geochalk/shared";
 import { api, config, ensureGuest, sessionKey } from "./api";
 import { Auth } from "./Auth";
 import { freshPostingLocation } from "./location";
@@ -149,7 +149,7 @@ export default function App() {
             body: JSON.stringify({ name: cmd.name }),
           });
           setUser(updated);
-          localStorage.setItem("geohash.chat.name", cmd.name);
+          localStorage.setItem("geochalk.name", cmd.name);
         }
         setDraft("");
         return;
@@ -256,7 +256,7 @@ export default function App() {
             setRoom("");
           }}
         >
-          <span className="brand-icon">⌗</span>geohash<span>.chat</span>
+          <span className="brand-icon">⌗</span>geo<span>chalk</span>
         </a>
         <div className="sidebar-intro">
           Good conversations
@@ -649,7 +649,7 @@ export default function App() {
           </section>
         )}
         <footer>
-          <span>geohash.chat</span>
+          <span>geochalk</span>
           <span>A conversation for every coordinate.</span>
           <span>Stay curious. Be kind.</span>
         </footer>
