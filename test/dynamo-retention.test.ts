@@ -2,6 +2,7 @@ import { expect, it, vi, afterEach } from "vitest";
 import {
   DynamoDBDocumentClient,
   BatchWriteCommand,
+  PutCommand,
 } from "@aws-sdk/lib-dynamodb";
 import { DynamoStore } from "../apps/api/src/dynamo";
 afterEach(() => {
@@ -13,10 +14,11 @@ it("bounds unprocessed-write retries and reports partial publication without rol
   const send = vi
     .spyOn(DynamoDBDocumentClient.prototype, "send")
     .mockImplementation((async (c: any) => {
+      if (c instanceof PutCommand) return {};
       expect(c).toBeInstanceOf(BatchWriteCommand);
       return { UnprocessedItems: c.input.RequestItems };
     }) as any);
-  const pending = new DynamoStore("posts", "controls").post({
+  const pending = new DynamoStore("posts", "controls", "archive").post({
     postId: "A".repeat(32),
     originGeohash: "c23nb62w",
     content: "Hi",
@@ -27,5 +29,5 @@ it("bounds unprocessed-write retries and reports partial publication without rol
   const check = expect(pending).rejects.toThrow("incomplete");
   await vi.runAllTimersAsync();
   await check;
-  expect(send).toHaveBeenCalledTimes(7);
+  expect(send).toHaveBeenCalledTimes(8);
 });

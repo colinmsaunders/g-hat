@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import {
   alphabet,
+  postSlot,
+  ROOM_CAPACITY,
   ancestors,
   roomSchema,
   bounds,
@@ -178,9 +180,9 @@ export default function App() {
           [
             result,
             ...old.filter(
-              (m) => m.postId.slice(0, 2) !== result.postId.slice(0, 2),
+              (m) => postSlot(m.postId) !== postSlot(result.postId),
             ),
-          ].slice(0, 50),
+          ].slice(0, ROOM_CAPACITY),
         );
         setTimeout(
           () =>
@@ -709,9 +711,10 @@ export default function App() {
               Posting sends coordinates, accuracy and timestamp for server
               validation; posts store a precision-8 geohash. Coarse abuse
               observations expire after 30 minutes. Browser locations can be
-              spoofed. Each room holds up to 1,024 posts; random collisions
-              replace posts, with no time expiry. Guest sessions last 30 days;
-              names are not unique.
+              spoofed. Original posts remain in an append-only archive,
+              including after deletion from rooms. Each room holds up to 256
+              posts; random collisions replace posts, with no time expiry. Guest
+              sessions last 30 days; names are not unique.
             </p>
           </section>
         </div>

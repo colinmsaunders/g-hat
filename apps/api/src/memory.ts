@@ -1,6 +1,8 @@
 import {
+  ROOM_CAPACITY,
   ancestors,
   originSchema,
+  postIdSchema,
   postSlot,
   type Post,
 } from "@geochalk/shared";
@@ -17,6 +19,7 @@ import {
 } from "./store";
 /** Process-local development store, mirroring independent slot overwrites, not AWS durability. */
 export class MemoryStore implements Store {
+  archive = new Map<string, Post>();
   sessions = new Map<string, Session>();
   rooms = new Map<string, Map<string, Post>>();
   bans = new Set<string>();
@@ -65,13 +68,24 @@ export class MemoryStore implements Store {
     else this.bans.delete(actor);
   }
   async post(post: Post) {
+    originSchema.parse(post.originGeohash);
+    postIdSchema.parse(post.postId);
+    const existing = this.archive.get(post.postId);
+    if (
+      existing &&
+      Object.keys(post).some(
+        (key) => existing[key as keyof Post] !== post[key as keyof Post],
+      )
+    )
+      throw new ApiError(409, "Post ID already exists.");
+    if (!existing) this.archive.set(post.postId, { ...post });
     for (const room of ancestors(originSchema.parse(post.originGeohash))) {
       const slots = this.rooms.get(room) ?? new Map<string, Post>();
       slots.set(postSlot(post.postId), { ...post });
       this.rooms.set(room, slots);
     }
   }
-  async list(room: string, cursor?: string, limit = 50) {
+  async list(room: string, cursor?: string, limit = ROOM_CAPACITY) {
     return pagePosts(
       [...(this.rooms.get(room)?.values() ?? [])],
       this.blocked.get(room) ?? new Set(),
@@ -81,12 +95,11 @@ export class MemoryStore implements Store {
     );
   }
   async get(origin: string, postId: string) {
-    for (const room of ancestors(originSchema.parse(origin)).reverse()) {
-      const post = this.rooms.get(room)?.get(postSlot(postId));
-      if (post?.postId === postId) return post;
-    }
-    return undefined;
+    originSchema.parse(origin);
+    const post = this.archive.get(postId);
+    return post?.originGeohash === origin ? { ...post } : undefined;
   }
+
   async remove(post: Post) {
     for (const room of ancestors(post.originGeohash)) {
       const blocked = this.blocked.get(room) ?? new Set<string>();

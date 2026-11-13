@@ -66,7 +66,7 @@ aws cognito-idp admin-add-user-to-group \
 
 Sign in again for an updated token. See [API contracts](api.md). There is no operator console or audit event stream yet.
 
-Posts have no TTL; collisions overwrite slots. Controls expire sessions, counters and coarse observations via TTL; reports, bans and moderation markers have no expiry. Tables, pools and buckets are retained on stack removal. Old resources remain billable and may contain old content.
+Room posts have no TTL; collisions overwrite 256 hex slots. `PostArchiveV1` retains every new original post by full ID, with PITR and no TTL. It is append-only: room deletion/moderation never deletes or modifies originals. Controls expire sessions, counters and coarse observations via TTL; reports, bans and moderation markers have no expiry. Room, control and archive tables, pools and buckets are retained on stack removal. Old resources remain billable and may contain old content.
 
 Configure alarm notification routing and budgets, then measure full-room reads, broad-prefix traffic and moderation storage growth. API throttling is 100 requests/second with a 200 burst, not a cost ceiling. Viewer-IP verification behind CloudFront remains future work. Keep dependency upgrades separate from this rename; recheck the lockfile audit before launch.
 
@@ -86,3 +86,9 @@ Active western resources:
 The production build, 33 TypeScript tests and four legacy migration-safety tests passed. Updated infrastructure assertions verify the new certificate, hosted zone and CloudFront alias. Live checks passed for HTTPS branding, built assets, geographic/global deep links, western config, API health, room reads, smart zoom, missing-auth rejection, request-header protection, secure renamed guest cookie, authenticated `/me` and missing-location rejection. One guest session was created; no test messages were published. Browser geolocation, email delivery and load testing remain outside these checks.
 
 See [cost estimates](costs.md) for traffic assumptions, growth thresholds and retained-resource costs.
+
+## In-place slots and archive update
+
+The 256-slot revision keeps `PostsV1` and `ControlV1` intact and adds `PostArchiveV1`, exposed through `ArchiveTableName` and the Lambda `ARCHIVE_TABLE_NAME` environment variable. It archives each new post before nine room writes. The archive permits only GetItem/PutItem to the API, and inserts are conditional to prevent overwrites. There is no backfill, propagation or removal of existing posts. Legacy physical slot records are ignored by current reads and remain stored. Browser refreshes now download all current room posts, up to 256. Deploy the backend and frontend together using the normal western-then-edge sequence.
+
+Deployed on 2026-11-13: both stacks completed their in-place updates. The active archive is `GeochalkWest-PostArchiveV1F59FA1E3-YXLKHJ4Z8C65`; it reports ACTIVE, on-demand billing and a `postId` hash key. Lambda reports a successful update with that archive configured. Build and all 35 TypeScript tests passed, covering full 256-post responses, slot distribution, retained originals after eviction/deletion, conditional archive insertion and failure ordering. Live HTTPS/API/config/session/validation checks passed without publishing posts. Existing room/control table names are unchanged, and no backfill was run.

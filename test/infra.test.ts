@@ -27,6 +27,22 @@ describe("AWS deployment guardrails", () => {
       { AttributeName: "pk", KeyType: "HASH" },
       { AttributeName: "sk", KeyType: "RANGE" },
     ]);
+    const archive = Object.entries(tables).find(([id]) =>
+      id.startsWith("PostArchiveV1"),
+    )![1];
+    expect(archive.DeletionPolicy).toBe("Retain");
+    expect(archive.Properties).not.toHaveProperty("TimeToLiveSpecification");
+    expect(archive.Properties.KeySchema).toEqual([
+      { AttributeName: "postId", KeyType: "HASH" },
+    ]);
+    expect(
+      archive.Properties.PointInTimeRecoverySpecification
+        .PointInTimeRecoveryEnabled,
+    ).toBe(true);
+    const policy = Object.values(template.findResources("AWS::IAM::Policy"))
+      .flatMap((r: any) => r.Properties.PolicyDocument.Statement)
+      .find((s: any) => JSON.stringify(s.Resource).includes("PostArchiveV1"));
+    expect(policy.Action).toEqual(["dynamodb:PutItem", "dynamodb:GetItem"]);
     template.resourceCountIs("AWS::CloudWatch::Dashboard", 1);
     template.hasResourceProperties("AWS::S3::Bucket", {
       PublicAccessBlockConfiguration: {
@@ -145,7 +161,7 @@ describe("western region preparation", () => {
     });
     const template = Template.fromStack(stack);
     template.resourceCountIs("AWS::CloudFront::Distribution", 1);
-    template.resourceCountIs("AWS::DynamoDB::Table", 2);
+    template.resourceCountIs("AWS::DynamoDB::Table", 3);
     template.resourceCountIs("AWS::Cognito::UserPool", 1);
     template.resourceCountIs("AWS::CertificateManager::Certificate", 1);
     template.hasResourceProperties("AWS::CertificateManager::Certificate", {

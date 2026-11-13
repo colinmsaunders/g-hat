@@ -42,6 +42,14 @@ export class ChatStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
       encryption: dynamodb.TableEncryption.AWS_MANAGED,
     });
+    const archive = new dynamodb.Table(this, "PostArchiveV1", {
+      partitionKey: { name: "postId", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+    });
+    new cdk.CfnOutput(this, "ArchiveTableName", { value: archive.tableName });
     const controls = new dynamodb.Table(this, "ControlV1", {
       partitionKey: { name: "pk", type: dynamodb.AttributeType.STRING },
       sortKey: { name: "sk", type: dynamodb.AttributeType.STRING },
@@ -132,6 +140,7 @@ export class ChatStack extends cdk.Stack {
         READ_ONLY: props?.readOnly ? "true" : "false",
         POSTS_TABLE_NAME: table.tableName,
         CONTROL_TABLE_NAME: controls.tableName,
+        ARCHIVE_TABLE_NAME: archive.tableName,
         USER_POOL_ID: pool.userPoolId,
         USER_POOL_CLIENT_ID: poolClient.userPoolClientId,
       },
@@ -142,6 +151,7 @@ export class ChatStack extends cdk.Stack {
     });
     table.grantReadWriteData(fn);
     controls.grantReadWriteData(fn);
+    archive.grant(fn, "dynamodb:PutItem", "dynamodb:GetItem");
     const api = new apigw.HttpApi(this, "HttpApi", {
       apiName: `${this.stackName}-api`,
       createDefaultStage: false,

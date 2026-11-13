@@ -6,7 +6,7 @@ export const roomSchema = z
     /^(?:_|[0-9bcdefghjkmnpqrstuvwxyz]{1,8})$/,
     "Use _ for the world or a geohash of 1–8 characters.",
   );
-export const ROOM_CAPACITY = 1024;
+export const ROOM_CAPACITY = 256;
 export const POST_ID_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 export const POST_ID_BYTES = 20;
 export const postIdSchema = z
@@ -35,7 +35,12 @@ export function encodePostId(bytes: Uint8Array): string {
   return result;
 }
 export function postSlot(postId: string): string {
-  return postIdSchema.parse(postId).slice(0, 2);
+  const id = postIdSchema.parse(postId);
+  // Decode the first byte: five bits from character 0 and three from character 1.
+  const byte =
+    (POST_ID_ALPHABET.indexOf(id[0]) << 3) |
+    (POST_ID_ALPHABET.indexOf(id[1]) >>> 2);
+  return byte.toString(16).padStart(2, "0");
 }
 export const LOCATION_MAX_AGE_MS = 60_000;
 export const LOCATION_FUTURE_SKEW_MS = 5_000;

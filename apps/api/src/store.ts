@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  ROOM_CAPACITY,
   postIdSchema,
   postSlot,
   type Identity,
@@ -105,7 +106,7 @@ export function pagePosts(
   blocked: Set<string>,
   room: string,
   cursor?: string,
-  limit = 50,
+  limit = ROOM_CAPACITY,
 ): Page {
   let before: z.infer<typeof positionSchema> | undefined;
   if (cursor) {

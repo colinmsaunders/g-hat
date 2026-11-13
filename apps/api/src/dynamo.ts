@@ -10,9 +10,11 @@ import {
   type BatchWriteCommandInput,
 } from "@aws-sdk/lib-dynamodb";
 import {
+  ROOM_CAPACITY,
   ancestors,
   originSchema,
   postIdSchema,
+  postSlot,
   type Post,
 } from "@geochalk/shared";
 import {
@@ -36,6 +38,7 @@ export class DynamoStore implements Store {
   constructor(
     private postsTable: string,
     private controlTable: string,
+    private archiveTable: string,
   ) {}
   private async readControl(pk: string, sk = "META") {
     return (
@@ -148,6 +151,27 @@ export class DynamoStore implements Store {
   async post(post: Post) {
     originSchema.parse(post.originGeohash);
     postIdSchema.parse(post.postId);
+    // Persist the immutable original before publishing any room copies.
+    try {
+      await client.send(
+        new PutCommand({
+          TableName: this.archiveTable,
+          Item: { ...post },
+          ConditionExpression: "attribute_not_exists(postId)",
+        }),
+      );
+    } catch (error) {
+      if ((error as Error).name !== "ConditionalCheckFailedException")
+        throw error;
+      const existing = await this.get(post.originGeohash, post.postId);
+      if (
+        !existing ||
+        Object.keys(post).some(
+          (key) => existing[key as keyof Post] !== post[key as keyof Post],
+        )
+      )
+        throw new ApiError(409, "Post ID already exists.");
+    }
     // Exactly nine independent unconditional full-body puts. Delayed overwrites are intentional.
     await this.batch(
       this.postsTable,
@@ -171,7 +195,8 @@ export class DynamoStore implements Store {
       );
       for (const item of result.Items ?? []) {
         const { pk, sk, ...post } = item;
-        posts.push(post as Post);
+        // Ignore old Base32 slot keys without migrating or deleting their records.
+        if (sk === postSlot(post.postId)) posts.push(post as Post);
       }
       cursor = result.LastEvaluatedKey;
     } while (cursor);
@@ -196,30 +221,24 @@ export class DynamoStore implements Store {
     } while (cursor);
     return blocked;
   }
-  async list(room: string, cursor?: string, limit = 50) {
+  async list(room: string, cursor?: string, limit = ROOM_CAPACITY) {
     const posts = await this.roomPosts(room);
     const blocked = await this.blocked(room);
     return pagePosts(posts, blocked, room, cursor, limit);
   }
   async get(originGeohash: string, postId: string) {
-    const copies = await Promise.all(
-      ancestors(originSchema.parse(originGeohash))
-        .reverse()
-        .map((room) =>
-          client.send(
-            new GetCommand({
-              TableName: this.postsTable,
-              Key: slotKey(room, postId),
-              ConsistentRead: true,
-            }),
-          ),
-        ),
+    originSchema.parse(originGeohash);
+    postIdSchema.parse(postId);
+    const { Item } = await client.send(
+      new GetCommand({
+        TableName: this.archiveTable,
+        Key: { postId },
+        ConsistentRead: true,
+      }),
     );
-    const item = copies.find((result) => result.Item?.postId === postId)?.Item;
-    if (!item) return undefined;
-    const { pk, sk, ...post } = item;
-    return post as Post;
+    return Item?.originGeohash === originGeohash ? (Item as Post) : undefined;
   }
+
   async remove(post: Post) {
     const rooms = ancestors(originSchema.parse(post.originGeohash));
     // Body-free moderation markers hide a delayed in-flight publication of this exact ID.

@@ -11,6 +11,7 @@ const app = createApp(
   new DynamoStore(
     process.env.POSTS_TABLE_NAME!,
     process.env.CONTROL_TABLE_NAME!,
+    process.env.ARCHIVE_TABLE_NAME!,
   ),
   async (token) => {
     const claims = await verifier.verify(token);
