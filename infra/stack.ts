@@ -244,7 +244,7 @@ export class ChatStack extends cdk.Stack {
     // Rewrite only navigation paths. API errors and missing assets keep their real status.
     const rewrite = new cloudfront.Function(this, "SpaRoutes", {
       code: cloudfront.FunctionCode.fromInline(
-        String.raw`function handler(event) { var r=event.request; if (r.uri === '/' || /^\/[0-9bcdefghjkmnpqrstuvwxyz]{1,8}\/?$/.test(r.uri)) r.uri='/index.html'; return r; }`,
+        String.raw`function handler(event) { var r=event.request; if (r.uri === '/' || /^\/(?:_|[0-9bcdefghjkmnpqrstuvwxyz]{1,8})\/?$/.test(r.uri)) r.uri='/index.html'; return r; }`,
       ),
     });
     const distribution = new cloudfront.Distribution(this, "Web", {

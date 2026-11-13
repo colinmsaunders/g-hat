@@ -59,7 +59,7 @@ describe("AWS deployment guardrails", () => {
       template.findResources("AWS::CloudFront::Function"),
     )[0].Properties.FunctionCode;
     const route = new Function(`${routing}; return handler;`)();
-    for (const uri of ["/", "/9q8yy", "/9q8yy/"])
+    for (const uri of ["/", "/_", "/_/", "/9q8yy", "/9q8yy/"])
       expect(route({ request: { uri } }).uri).toBe("/index.html");
     for (const uri of [
       "/api/health",

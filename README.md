@@ -28,7 +28,7 @@ npm run synth
 - React/Vite frontend with rooms at `/<geohash>`, child and parent navigation, optional browsing geolocation, required fresh posting location, activity-based smart zoom, and a responsive chat interface.
 - Public room reads, guest sessions, optional Cognito email accounts, slash commands, and HTTP polling every five seconds while visible. Guest display names are not unique.
 - Server-derived precision-8 posting origins, fresh location checks, persistent HttpOnly guest cookies, and short-lived coarse observations for motion checks.
-- Eight unconditional denormalized writes into independent rooms. Each room has 1,024 random Base32 slots; collisions replace posts without chronological eviction or post TTL.
+- Nine unconditional denormalized writes into independent rooms. Each room has 1,024 random Base32 slots; collisions replace posts without chronological eviction or post TTL.
 - Full-room query pagination, timestamp sorting, per-identity/IP limits, duplicate/content/motion admission checks, reporting and replacement-safe moderation deletion.
 - CDK: HTTP API, Lambda, separate post/control DynamoDB tables, Cognito, private S3, CloudFront, optional Route 53/ACM, logs, error alarms and storage metrics dashboard.
 - Same API application in local and Lambda adapters; behavior tests and infrastructure assertions.

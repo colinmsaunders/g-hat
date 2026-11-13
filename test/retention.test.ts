@@ -42,7 +42,7 @@ it("cryptographic samples reach all slots with broadly uniform frequency", () =>
     [...counts.values()].reduce((sum, n) => sum + (n - 64) ** 2 / 64, 0),
   ).toBeLessThan(1400);
 });
-it("copies full posts eight times; shared ancestor collisions do not delete other descendants", async () => {
+it("copies full posts nine times; shared ancestor collisions do not delete other descendants", async () => {
   const store = new MemoryStore(),
     a = makePost(),
     b = makePost({ postId: "AA" + "B".repeat(30), originGeohash: "c23nb62x" });
@@ -96,4 +96,21 @@ it("keeps at most 1024 slots after filling every slot and overwriting them", asy
     await store.post(makePost({ postId: encodePostId(bytes) }));
   }
   for (const room of store.rooms.values()) expect(room.size).toBe(1024);
+});
+
+it("aggregates unrelated regions globally and keeps their copies after global collisions", async () => {
+  const store = new MemoryStore();
+  const a = makePost(),
+    b = makePost({ originGeohash: "u10j46tj", postId: "AA" + "B".repeat(30) });
+  await store.post(a);
+  // Model pre-extension data: opening global reads never backfills old copies.
+  store.rooms.delete("_");
+  expect((await store.list("_")).posts).toEqual([]);
+  await store.post(b);
+  expect((await store.list("_")).posts).toEqual([b]);
+  expect((await store.list("c")).posts).toEqual([a]);
+  await store.remove(a);
+  expect((await store.list("_")).posts).toEqual([b]);
+  await store.remove(b);
+  expect((await store.list("_")).posts).toEqual([]);
 });

@@ -8,7 +8,7 @@ All routes start with `/api`. JSON errors are `{error:string}`. Public room read
 | POST   | `/sessions`                                | `{name?:string}`              | 201 `{identity,expiresAt}` plus HttpOnly cookie; 200 if valid cookie already exists |
 | GET    | `/me`                                      | Cookie or Cognito             | `Identity`                                                                          |
 | PATCH  | `/me`                                      | Guest cookie, `{name}`        | Updated identity                                                                    |
-| GET    | `/rooms/suggest?geohash=c23nb62w`          | Prefix 1–8                    | `{room,counts,windowMinutes:15,targetMessages:3}`                                   |
+| GET    | `/rooms/suggest?geohash=c23nb62w`          | Prefix 0–8 (`_` for 0)        | `{room,counts,windowMinutes:15,targetMessages:3}`                                   |
 | GET    | `/rooms/:prefix/messages?cursor=…`         | Optional cursor               | `{posts:Post[],cursor?:string}`                                                     |
 | POST   | `/messages`                                | `{content,location}`          | 201 `Post`                                                                          |
 | DELETE | `/messages/:postId?originGeohash=c23nb62w` | Owner or moderator            | `{deleted:true}`                                                                    |
@@ -32,7 +32,7 @@ Example posting request (timestamp must be the fresh browser fix timestamp, not 
 
 Location accuracy must be positive and at most 5,000 meters; timestamp is epoch milliseconds within 60 seconds of receipt, allowing five seconds future skew. Server-derived `originGeohash` always has eight characters. Extra viewing-room parameters are ignored. Room-addressed posting is unsupported. Missing permission/fix prevents posting, not browsing.
 
-The complete [Post payload and eight precision levels](architecture.md) define shared identity across copies. `postId` is 32 uppercase RFC 4648 Base32 characters; the first two identify its slot. `createdAt` is server ISO UTC time. `displayName` is a non-unique snapshot. Public `authorId` determines ownership, not the name. Location fields are transient; posts expose only the derived origin cell, which can still reveal sensitive whereabouts.
+The complete [Post payload and nine precision levels](architecture.md) define shared identity across copies. `postId` is 32 uppercase RFC 4648 Base32 characters; the first two identify its slot. `createdAt` is server ISO UTC time. `displayName` is a non-unique snapshot. Public `authorId` determines ownership, not the name. Location fields are transient; posts expose only the derived origin cell, which can still reveal sensitive whereabouts.
 
 `Identity` is `{id,name,moderator}`. `Report` is `{id,postId,originGeohash,authorId,reason,reporterId,createdAt}`. Reasons are trimmed 3–500 characters; names 2–24 letters, digits, spaces or `_ . -`; content is plain text trimmed to 1–2,000 characters. Request bodies are capped at 16,000 characters.
 

@@ -34,7 +34,7 @@ describe("geohash geometry", () => {
     expect(() => encode(NaN, 0)).toThrow();
   });
   it("chooses the deepest active ancestor, or a neighborhood when quiet", () => {
-    expect(ancestors("9q8")).toEqual(["9", "9q", "9q8"]);
+    expect(ancestors("9q8")).toEqual(["_", "9", "9q", "9q8"]);
     expect(chooseRoom("9q8yyk8y", { "9": 100, "9q8": 20, "9q8yy": 3 })).toBe(
       "9q8yy",
     );
@@ -48,7 +48,21 @@ describe("geohash geometry", () => {
     expect(command("/out", "9q8yy")).toEqual({ kind: "go", room: "9q8y" });
     expect(command("/in b", "9q8yy")).toEqual({ kind: "go", room: "9q8yyb" });
     expect(command("hi", "9q8yy")).toBeNull();
-    expect(() => command("/out", "9")).toThrow();
+    expect(() => command("/out", "_")).toThrow();
     expect(() => command("/in b", "9q8yyk8y")).toThrow();
   });
+});
+
+it("supports the global room at precision zero and zooms across its boundary", () => {
+  expect(roomSchema.parse("_")).toBe("_");
+  for (const invalid of ["", "_c", "c_", "__"])
+    expect(roomSchema.safeParse(invalid).success).toBe(false);
+  expect(encode(37, -122, 0)).toBe("_");
+  expect(bounds("_")).toEqual({ south: -90, north: 90, west: -180, east: 180 });
+  expect(ancestors("_")).toEqual(["_"]);
+  expect(command("/out", "c")).toEqual({ kind: "go", room: "_" });
+  expect(command("/in c", "_")).toEqual({ kind: "go", room: "c" });
+  expect(command("/join _", "c23")).toEqual({ kind: "go", room: "_" });
+  expect(chooseRoom("c23nb62w", { _: 3 })).toBe("_");
+  expect(chooseRoom("_", {})).toBe("_");
 });

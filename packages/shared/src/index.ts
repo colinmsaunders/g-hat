@@ -3,8 +3,8 @@ export const alphabet = "0123456789bcdefghjkmnpqrstuvwxyz";
 export const roomSchema = z
   .string()
   .regex(
-    /^[0-9bcdefghjkmnpqrstuvwxyz]{1,8}$/,
-    "Use a geohash of 1–8 characters.",
+    /^(?:_|[0-9bcdefghjkmnpqrstuvwxyz]{1,8})$/,
+    "Use _ for the world or a geohash of 1–8 characters.",
   );
 export const ROOM_CAPACITY = 1024;
 export const POST_ID_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
@@ -79,7 +79,12 @@ export interface Page {
 }
 export function ancestors(room: string): string[] {
   roomSchema.parse(room);
-  return Array.from({ length: room.length }, (_, i) => room.slice(0, i + 1));
+  return room === "_"
+    ? ["_"]
+    : [
+        "_",
+        ...Array.from({ length: room.length }, (_, i) => room.slice(0, i + 1)),
+      ];
 }
 export function encode(lat: number, lon: number, precision = 8): string {
   if (
@@ -90,10 +95,11 @@ export function encode(lat: number, lon: number, precision = 8): string {
     lon < -180 ||
     lon > 180 ||
     !Number.isInteger(precision) ||
-    precision < 1 ||
+    precision < 0 ||
     precision > 8
   )
     throw new Error("Invalid coordinates or precision");
+  if (precision === 0) return "_";
   let south = -90,
     north = 90,
     west = -180,
@@ -129,7 +135,7 @@ export function bounds(room: string) {
     west = -180,
     east = 180,
     even = true;
-  for (const c of room) {
+  for (const c of room === "_" ? "" : room) {
     const value = alphabet.indexOf(c);
     for (let mask = 16; mask; mask >>= 1) {
       const mid = even ? (west + east) / 2 : (south + north) / 2;
@@ -168,14 +174,14 @@ export function command(text: string, room: string): Command | null {
   if (verb === "/join")
     return { kind: "go", room: roomSchema.parse(arg.toLowerCase()) };
   if (verb === "/out") {
-    if (room.length === 1) throw new Error("Already at the widest room.");
-    return { kind: "go", room: room.slice(0, -1) };
+    if (room === "_") throw new Error("Already at the widest room.");
+    return { kind: "go", room: room.length === 1 ? "_" : room.slice(0, -1) };
   }
   if (verb === "/in") {
     if (room.length === 8) throw new Error("Already at maximum precision.");
     if (arg.length !== 1 || !alphabet.includes(arg))
       throw new Error("Use /in followed by one geohash character.");
-    return { kind: "go", room: room + arg };
+    return { kind: "go", room: (room === "_" ? "" : room) + arg };
   }
   if (verb === "/nick") return { kind: "name", name: nameSchema.parse(arg) };
   if (verb === "/help") return { kind: "help" };

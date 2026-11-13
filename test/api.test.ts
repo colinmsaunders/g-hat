@@ -54,7 +54,7 @@ it("posts by server-derived location independent of viewed room and stores no ra
     content: "Here",
   });
   expect((await store.list("u10")).posts).toEqual([]);
-  expect(store.rooms.size).toBe(8);
+  expect(store.rooms.size).toBe(9);
   for (const room of store.rooms.values())
     expect(JSON.stringify([...room.values()])).not.toMatch(
       /latitude|longitude|accuracy|timestamp/,
@@ -235,4 +235,21 @@ it("fails closed on optional location-risk denial before slot writes", async () 
     ).status,
   ).toBe(422);
   expect(post).not.toHaveBeenCalled();
+});
+
+it("exposes the global room and includes new location-derived posts", async () => {
+  const { request } = await setup();
+  const result = await request("POST", "/messages", {
+    content: "Global test",
+    room: "_",
+    location: locationFor("9q8yyk8y"),
+  });
+  expect(result.status).toBe(201);
+  const global = await request("GET", "/rooms/_/messages");
+  expect(global.status).toBe(200);
+  expect((global.body as any).posts).toEqual([result.body]);
+  expect((result.body as any).originGeohash).toBe("9q8yyk8y");
+  expect((await request("GET", "/rooms/suggest?geohash=_")).body).toMatchObject(
+    { room: "_" },
+  );
 });

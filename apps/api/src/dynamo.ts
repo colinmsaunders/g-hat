@@ -148,7 +148,7 @@ export class DynamoStore implements Store {
   async post(post: Post) {
     originSchema.parse(post.originGeohash);
     postIdSchema.parse(post.postId);
-    // Exactly eight independent unconditional full-body puts. Delayed overwrites are intentional.
+    // Exactly nine independent unconditional full-body puts. Delayed overwrites are intentional.
     await this.batch(
       this.postsTable,
       ancestors(post.originGeohash).map((room) => ({

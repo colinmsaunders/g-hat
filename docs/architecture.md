@@ -2,12 +2,15 @@
 
 Read anywhere. Post from your reported current location. The TypeScript monorepo, Lambda HTTP API, DynamoDB, React/Vite, Cognito and CDK remain in place. This revision replaces adaptive precision and newest-1,000 retention. It is deployed to account 451261323611, with the active application in us-west-2.
 
-## Eight geographic levels
+The global-room extension is a local update awaiting deployment. It adds a ninth copy for new posts only; existing posts are not backfilled. The global room has the same independent 1,024-slot limit and may become the hottest partition.
 
-A room is a lowercase geohash prefix of length 1–8. There is no precision-zero global room. A new post always has a precision-8 origin, regardless of the room being viewed. For origin `c23nb62w`, the eight copies are:
+## Nine geographic levels
+
+A room is a geohash prefix of length 0–8. The zero-length prefix is represented by `_` in URLs, API parameters and DynamoDB partition keys; `/_` is the global room. Empty strings remain invalid room identifiers. A new post always has a precision-8 origin, regardless of the room being viewed. For origin `c23nb62w`, the nine copies are:
 
 | Precision | Room partition |
 | --------- | -------------- |
+| 0         | `_`            |
 | 1         | `c`            |
 | 2         | `c2`           |
 | 3         | `c23`          |
@@ -34,25 +37,25 @@ interface Post {
 }
 ```
 
-Every item contains all six fields plus `pk = roomPrefix`, `sk = slot`. The same post ID and payload are copied to all eight prefixes. Identity is distinct from the slot: many unrelated posts can occupy that slot over time. There is no separate canonical body, reference lookup, feed list, receipt or activity bucket.
+Every item contains all six fields plus `pk = roomPrefix`, `sk = slot`. The same post ID and payload are copied to all nine rooms. Identity is distinct from the slot: many unrelated posts can occupy that slot over time. There is no separate canonical body, reference lookup, feed list, receipt or activity bucket.
 
 ## Storage, retention and concurrent writes
 
 CDK creates `PostsV3` (on-demand, encrypted, retained, PITR, no TTL) and `ControlV3` (on-demand, encrypted, retained, TTL on `expiresAt`). Both use string `pk`/`sk`, with no secondary indexes or explicit sharding.
 
-After admission, a single batch contains eight unconditional full-item puts. Unprocessed items retry up to seven batch attempts with exponential backoff and jitter; SDK transport retries also apply. Conditions, transactions and revision locks are absent from normal posting. Batch operations overwrite existing items and are not atomic as a group. See [AWS BatchWriteItem semantics](https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_BatchWriteItem.html).
+After admission, a single batch contains nine unconditional full-item puts. Unprocessed items retry up to seven batch attempts with exponential backoff and jitter; SDK transport retries also apply. Conditions, transactions and revision locks are absent from normal posting. Batch operations overwrite existing items and are not atomic as a group. See [AWS BatchWriteItem semantics](https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_BatchWriteItem.html).
 
 A delayed older write may replace a newer one. Zoom levels can disagree. Exhausted retries report 503; some copies may already exist. There is no rollback or API idempotency receipt. Clients should refresh before retrying an uncertain publication; a new accepted HTTP attempt creates a new ID. Retries inside a batch retain the original ID.
 
-A room contains at most 1,024 posts, often fewer while filling. Under independent uniform subsequent post IDs, a post survives n writes to that room with probability `(1023/1024)^n`. Retries of the same ID are correlated and are not independent trials. Room eviction means overwriting one slot; it never triggers deletes elsewhere. There is no FIFO queue, cleanup task, retention TTL or strict newest-wins guarantee. Quiet rooms retain surviving posts indefinitely. Retention between ancestor rooms is independent operationally, but collision events can be correlated because the same slot is used across the eight copies.
+A room contains at most 1,024 posts, often fewer while filling. Under independent uniform subsequent post IDs, a post survives n writes to that room with probability `(1023/1024)^n`. Retries of the same ID are correlated and are not independent trials. Room eviction means overwriting one slot; it never triggers deletes elsewhere. There is no FIFO queue, cleanup task, retention TTL or strict newest-wins guarantee. Quiet rooms retain surviving posts indefinitely. Retention between ancestor rooms is independent operationally, but collision events can be correlated because the same slot is used across the nine copies.
 
 ## Reading and moderation
 
 Read every Query page for the requested partition, following `LastEvaluatedKey` through the [DynamoDB 1 MB pagination boundary](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Query.Pagination.html). Query moderation markers separately, filter matching IDs, then sort by `createdAt` descending with `postId` descending as tie-breaker. Return 50 posts and a room-bound timestamp/ID cursor. Cursor pagination is best effort, not a snapshot; concurrent writes can change subsequent pages. Strongly consistent individual queries do not create a multi-page snapshot. Sort-key order is never interpreted as recency.
 
-Deletion/reporting supplies `originGeohash` plus `postId`. The store looks for that exact ID in any surviving ancestor copy. Owner/moderator deletion first writes eight body-free moderation markers, then conditionally deletes each slot only if its `postId` still matches. Replacement posts survive. Markers also hide delayed replays of the deleted ID. Markers and reports have no expiry and can grow beyond the bounded post storage; this deliberate moderation metadata tradeoff needs future retention policy. If all copies have vanished, lookup returns 404. Ban admission blocks future posts; removing already published posts requires targeted deletion.
+Deletion/reporting supplies `originGeohash` plus `postId`. The store looks for that exact ID in any surviving ancestor copy. Owner/moderator deletion first writes nine body-free moderation markers, then conditionally deletes each slot only if its `postId` still matches. Replacement posts survive. Markers also hide delayed replays of the deleted ID. Markers and reports have no expiry and can grow beyond the bounded post storage; this deliberate moderation metadata tradeoff needs future retention policy. If all copies have vanished, lookup returns 404. Ban admission blocks future posts; removing already published posts requires targeted deletion.
 
-Smart zoom counts currently surviving, unmoderated posts created in the last 15 minutes, choosing the deepest room with at least three. It does not count historical writes that collided away. It queries up to eight rooms; this avoids additional posting fanout but adds read cost.
+Smart zoom counts currently surviving, unmoderated posts created in the last 15 minutes, choosing the deepest room with at least three. It does not count historical writes that collided away. It queries up to nine rooms; this avoids additional posting fanout but adds read cost.
 
 ## Guest identity and admission
 

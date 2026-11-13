@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import {
   alphabet,
+  ancestors,
+  roomSchema,
   bounds,
   command,
   encode,
@@ -18,7 +20,7 @@ const places = [
   { name: "Tokyo", room: "xn76u", label: "A different time zone" },
 ];
 const levels = [
-  "",
+  "The whole world",
   "A corner of the world",
   "A region",
   "A city & its neighbors",
@@ -30,10 +32,12 @@ const levels = [
 ];
 function initialRoom() {
   const path = location.pathname.slice(1).replace(/\/$/, "");
-  return /^[0-9bcdefghjkmnpqrstuvwxyz]{1,8}$/.test(path) ? path : "";
+  return roomSchema.safeParse(path).success ? path : "";
 }
 export default function App() {
   const [room, setRoom] = useState(initialRoom);
+  const precision = room === "_" ? 0 : room.length;
+  const prefix = room === "_" ? "" : room;
   const [user, setUser] = useState<Identity>();
   const [messages, setMessages] = useState<Post[]>([]);
   const [cursor, setCursor] = useState<string>();
@@ -166,7 +170,8 @@ export default function App() {
       );
       if (
         currentRoom.current &&
-        result.originGeohash.startsWith(currentRoom.current) &&
+        (currentRoom.current === "_" ||
+          result.originGeohash.startsWith(currentRoom.current)) &&
         !historyMode.current
       ) {
         setMessages((old) =>
@@ -284,9 +289,10 @@ export default function App() {
           className="join"
           onSubmit={(e) => {
             e.preventDefault();
-            if (/^[0-9bcdefghjkmnpqrstuvwxyz]{1,8}$/.test(join.toLowerCase()))
+            if (roomSchema.safeParse(join.toLowerCase()).success)
               go(join.toLowerCase());
-            else setError("Enter a valid geohash of 1–8 characters.");
+            else
+              setError("Enter _ for the world or a geohash of 1–8 characters.");
           }}
         >
           <label htmlFor="join-room">GO SOMEWHERE SPECIFIC</label>
@@ -358,7 +364,7 @@ export default function App() {
             </h1>
             <p>
               {room
-                ? `${levels[room.length]}. Everyone is welcome.`
+                ? `${levels[precision]}. Everyone is welcome.`
                 : "Find your people, a few blocks away or a world apart."}
             </p>
           </div>
@@ -367,11 +373,11 @@ export default function App() {
               <span>ROOM PRECISION</span>
               <div>
                 {Array.from({ length: 8 }, (_, i) => (
-                  <i key={i} className={i < room.length ? "filled" : ""} />
+                  <i key={i} className={i < precision ? "filled" : ""} />
                 ))}
               </div>
               <small>
-                {room.length} of 8 · {levels[room.length]}
+                {precision} of 8 · {levels[precision]}
               </small>
             </div>
           )}
@@ -398,17 +404,17 @@ export default function App() {
           <>
             <section className="room-tools">
               <div className="breadcrumbs">
-                {room.split("").map((_, i) => (
-                  <button key={i} onClick={() => go(room.slice(0, i + 1))}>
-                    {room.slice(0, i + 1)}
-                    {i < room.length - 1 && <span> / </span>}
+                {ancestors(room).map((ancestor, i) => (
+                  <button key={i} onClick={() => go(ancestor)}>
+                    {ancestor}
+                    {i < precision && <span> / </span>}
                   </button>
                 ))}
               </div>
               <button
                 className="pill"
-                disabled={room.length === 1}
-                onClick={() => go(room.slice(0, -1))}
+                disabled={room === "_"}
+                onClick={() => go(room.length === 1 ? "_" : room.slice(0, -1))}
               >
                 − Zoom out
               </button>
@@ -593,7 +599,7 @@ export default function App() {
                       </span>
                     </div>
                   )}
-                  {room.length < 8 ? (
+                  {precision < 8 ? (
                     <>
                       <h4>
                         Get a little closer <span>↘</span>
@@ -602,9 +608,9 @@ export default function App() {
                       <div className="children">
                         {[...alphabet].map((c) => (
                           <button
-                            title={`Join ${room + c}`}
+                            title={`Join ${prefix + c}`}
                             key={c}
-                            onClick={() => go(room + c)}
+                            onClick={() => go(prefix + c)}
                           >
                             {c}
                           </button>

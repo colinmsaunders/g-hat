@@ -15,7 +15,7 @@ const post = {
   createdAt: "2026-11-11T12:00:00.000Z",
 };
 afterEach(() => vi.restoreAllMocks());
-it("makes eight unconditional denormalized writes and retries only unprocessed items", async () => {
+it("makes nine unconditional denormalized writes and retries only unprocessed items", async () => {
   const calls: any[] = [];
   vi.spyOn(DynamoDBDocumentClient.prototype, "send").mockImplementation((async (
     c: any,
@@ -27,12 +27,16 @@ it("makes eight unconditional denormalized writes and retries only unprocessed i
       : {};
   }) as any);
   await new DynamoStore("posts", "control").post(post);
-  expect(calls[0].RequestItems.posts).toHaveLength(8);
+  expect(calls[0].RequestItems.posts).toHaveLength(9);
   expect(calls[1].RequestItems.posts).toEqual([calls[0].RequestItems.posts[3]]);
   for (const [i, w] of calls[0].RequestItems.posts.entries())
     expect(w).toEqual({
       PutRequest: {
-        Item: { ...post, pk: post.originGeohash.slice(0, i + 1), sk: "AA" },
+        Item: {
+          ...post,
+          pk: i === 0 ? "_" : post.originGeohash.slice(0, i),
+          sk: "AA",
+        },
       },
     });
 });
@@ -81,5 +85,5 @@ it("guards moderation deletes by exact post ID and tolerates replaced slots", as
     });
   }) as any);
   await new DynamoStore("posts", "control").remove(post);
-  expect(deletes).toBe(8);
+  expect(deletes).toBe(9);
 });

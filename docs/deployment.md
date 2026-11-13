@@ -77,7 +77,7 @@ Sign out and back in to receive a new ID token containing the group. Use that ID
 
 Rooms hold at most 1,024 random slots without post TTL. Collisions overwrite full copies independently; there are no canonical bodies or chronological eviction. Control-table TTL expires sessions, counters and coarse observations. Reports, bans and moderation markers have no TTL. Post PITR and retained legacy tables can contain older content. DynamoDB, Cognito and asset buckets retain resources on stack removal.
 
-At five-second polling, one visible tab makes up to 720 requests/hour; each room read retrieves all available slots before sorting and selecting 50. Smart zoom reads up to eight rooms. Broad prefixes and moderation partitions may become hot or expensive. Monitor the storage dashboard (capacity, throttles, latency), configure budgets and alarm notifications, and run load tests. API Gateway throttles at 100 requests/second with a 200 burst; this is not a guaranteed cost ceiling. Source-IP limiting behind CloudFront is a shared backstop, not viewer-IP WAF enforcement.
+At five-second polling, one visible tab makes up to 720 requests/hour; each room read retrieves all available slots before sorting and selecting 50. Smart zoom reads up to nine rooms. Broad prefixes and moderation partitions may become hot or expensive. Monitor the storage dashboard (capacity, throttles, latency), configure budgets and alarm notifications, and run load tests. API Gateway throttles at 100 requests/second with a 200 burst; this is not a guaranteed cost ceiling. Source-IP limiting behind CloudFront is a shared backstop, not viewer-IP WAF enforcement.
 
 ## Dependency audit
 
