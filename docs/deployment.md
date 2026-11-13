@@ -27,6 +27,12 @@ Both regions are bootstrapped. Each stack pins its own region; changing `AWS_REG
 
 S3 remains private with CloudFront Origin Access Control. The western bucket policy grants read access only to the existing distribution. The edge stack imports this bucket, so CDK reports that it cannot update the imported policy; that policy is deliberately managed by the western stack. `/api/*` is uncached and forwards Authorization, cookies and the custom request header. Only `/` and valid geohash paths rewrite to the SPA.
 
+## Global room deployment — 2026-11-13
+
+Commit `5c2e0fa` adds precision zero as `_`, nine-room posting and moderation, and the `/_` frontend route. AWS caller identity was verified as account **451261323611**. Both `GeohashChatWest` (us-west-2) and `GeohashChat` (us-east-1 edge stack) reached `UPDATE_COMPLETE`. No table changes or backfill were performed.
+
+The production build and all 33 tests passed. Read-only live checks passed for `/_`, `/_/`, matching deployed frontend assets, `/api/rooms/_/messages`, global room suggestion, western configuration and API health. No test posts were published.
+
 ## Schema v3 deployment — 2026-11-11
 
 Caller identity confirmed account **451261323611**. The western stack and edge stack were updated; the active CloudFront API and asset origins remain in us-west-2. The eastern backend remains read-only and does not serve site traffic. Both stacks provisioned their v3 tables; old DataV2 physical tables were retained without migration.

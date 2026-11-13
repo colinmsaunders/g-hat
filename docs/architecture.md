@@ -2,7 +2,7 @@
 
 Read anywhere. Post from your reported current location. The TypeScript monorepo, Lambda HTTP API, DynamoDB, React/Vite, Cognito and CDK remain in place. This revision replaces adaptive precision and newest-1,000 retention. It is deployed to account 451261323611, with the active application in us-west-2.
 
-The global-room extension is a local update awaiting deployment. It adds a ninth copy for new posts only; existing posts are not backfilled. The global room has the same independent 1,024-slot limit and may become the hottest partition.
+The global-room extension was deployed on 2026-11-13. It adds a ninth copy for new posts only; existing posts are not backfilled. The global room has the same independent 1,024-slot limit and may become the hottest partition.
 
 ## Nine geographic levels
 
